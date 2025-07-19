@@ -1,4 +1,3 @@
-// DSLParser.java
 package org.pulse.lwre.dsl;
 
 import org.pulse.lwre.core.Rule;
@@ -105,6 +104,7 @@ public class DSLParser {
         String[] lines = ruleContent.split("\\n");
         StringBuilder currentBlock = new StringBuilder();
         String currentBlockType = null;
+        boolean hasRuleDirective = false;
 
         for (String line : lines) {
             line = line.trim();
@@ -112,10 +112,19 @@ public class DSLParser {
 
             if (line.startsWith("#RULE")) {
                 flushBlock(rule, currentBlockType, currentBlock);
-                rule.setName(line.substring(5).trim());
+                String ruleName = line.substring(5).trim();
+                if (ruleName.isEmpty()) {
+                    throw new DSLException("Rule name cannot be empty");
+                }
+                rule.setName(ruleName);
+                hasRuleDirective = true;
             } else if (line.startsWith("#PRIORITY")) {
                 flushBlock(rule, currentBlockType, currentBlock);
-                rule.setPriority(Integer.parseInt(line.substring(9).trim()));
+                try {
+                    rule.setPriority(Integer.parseInt(line.substring(9).trim()));
+                } catch (NumberFormatException e) {
+                    throw new DSLException("Invalid priority value: " + line.substring(9).trim());
+                }
             } else if (line.startsWith("#GROUP")) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 rule.setGroup(line.substring(6).trim());
@@ -168,6 +177,18 @@ public class DSLParser {
             }
         }
         flushBlock(rule, currentBlockType, currentBlock);
+
+        // Validation checks
+        if (!hasRuleDirective) {
+            throw new DSLException("Rule must have a #RULE directive");
+        }
+        if (rule.getName() == null || rule.getName().isEmpty()) {
+            throw new DSLException("Rule name cannot be empty");
+        }
+        if (rule.getConditionBlock() == null && rule.getActionBlock() == null) {
+            throw new DSLException("Rule must have at least one of #CONDITION or #ACTION blocks");
+        }
+
         return rule;
     }
     /**
@@ -181,22 +202,49 @@ public class DSLParser {
         if (blockType == null || block == null) return;
 
         String content = block.toString().trim();
-        if (content.isEmpty())
-            throw new DSLException("Invalid Syntax");
+        if (content.isEmpty()) {
+            if ("IMPORT".equals(blockType)) {
+                throw new DSLException("IMPORT block cannot be empty");
+            }
+            if ("PRODUCE".equals(blockType)) {
+                throw new DSLException("PRODUCE block cannot be empty");
+            }
+            if ("USE".equals(blockType)) {
+                throw new DSLException("USE block cannot be empty");
+            }
+            if ("CONDITION".equals(blockType)) {
+                throw new DSLException("CONDITION block cannot be empty");
+            }
+            if ("ACTION".equals(blockType)) {
+                throw new DSLException("ACTION block cannot be empty");
+            }
+            if ("FINAL".equals(blockType)) {
+                throw new DSLException("FINAL block cannot be empty");
+            }
+            return;
+        }
 
         switch (blockType) {
             case "IMPORT":
                 for (String imp : content.split("\n")) {
-                    rule.getImports().add(imp.trim());
+                    String trimmed = imp.trim();
+                    if (!trimmed.isEmpty()) {
+                        rule.getImports().add(trimmed);
+                    }
                 }
                 break;
 
             case "PRODUCE":
                 for (String produce : content.split("\n")) {
-                    String[] parts = produce.trim().split("\\s+as\\s+");
-                    if (parts.length == 2) {
-                        rule.getProduces().put(parts[0].trim(), parts[1].trim());
+                    String trimmed = produce.trim();
+                    if (trimmed.isEmpty()) {
+                        throw new DSLException("PRODUCE statement cannot be empty");
                     }
+                    String[] parts = trimmed.split("\\s+as\\s+");
+                    if (parts.length != 2) {
+                        throw new DSLException("Invalid PRODUCE format. Expected: '<type> as <alias>'");
+                    }
+                    rule.getProduces().put(parts[0].trim(), parts[1].trim());
                 }
                 break;
 
@@ -209,14 +257,23 @@ public class DSLParser {
                 break;
 
             case "CONDITION":
+                if (rule.getConditionBlock() != null) {
+                    throw  new DSLException("Rule does not allow multiple condition blocks");
+                }
                 rule.setConditionBlock(content);
                 break;
 
             case "ACTION":
+                if (rule.getActionBlock() != null) {
+                    throw  new DSLException("Rule does not allow multiple action blocks");
+                }
                 rule.setActionBlock(content);
                 break;
 
             case "FINAL":
+                if (rule.getFinalBlock() != null) {
+                    throw  new DSLException("Rule does not allow multiple final blocks");
+                }
                 rule.setFinalBlock(content);
                 break;
         }
@@ -242,9 +299,11 @@ public class DSLParser {
                 String ruleName = src.substring(4).trim();
                 rule.getUses().put(local,
                         new Rule.UseVariable(var, "RULE", ruleName, type));
+            } else {
+                throw new DSLException("Invalid source in USE directive: " + src);
             }
         } else {
-            throw new DSLException("Invalid Syntax");
+            throw new DSLException("Invalid USE format. Expected: '<variable> : <type> as <alias> FROM <RULE <name>|Global>'");
         }
     }
     /**
@@ -253,16 +312,22 @@ public class DSLParser {
      * @param rule the rule to update
      * @param line the RETRY directive line
      */
-    private static void parseRetryDirective(Rule rule, String line) {
+    private static void parseRetryDirective(Rule rule, String line) throws DSLException {
         Matcher m = RETRY_PATTERN.matcher(line);
         if (m.find()) {
-            rule.setMaxRetries(Integer.parseInt(m.group(1)));
-            if (m.group(2) != null) {
-                rule.setRetryDelay(Long.parseLong(m.group(2)));
+            try {
+                rule.setMaxRetries(Integer.parseInt(m.group(1)));
+                if (m.group(2) != null) {
+                    rule.setRetryDelay(Long.parseLong(m.group(2)));
+                }
+                if (m.group(3) != null) {
+                    rule.setRetryCondition(m.group(3).trim());
+                }
+            } catch (NumberFormatException e) {
+                throw new DSLException("Invalid number in RETRY directive");
             }
-            if (m.group(3) != null) {
-                rule.setRetryCondition(m.group(3).trim());
-            }
+        } else {
+            throw new DSLException("Invalid RETRY format. Expected: '#RETRY <maxAttempts> [DELAY <delay>] [IF {condition}]'");
         }
     }
     /**
@@ -271,7 +336,7 @@ public class DSLParser {
      * @param rule the rule to update
      * @param line the NEXT directive line
      */
-    private static void parseNextDirective(Rule rule, String line) {
+    private static void parseNextDirective(Rule rule, String line) throws DSLException {
         Matcher m = NEXT_RULE_PATTERN.matcher(line);
         if (m.find()) {
             String condition = m.group(1);
@@ -282,6 +347,8 @@ public class DSLParser {
             } else if ("FAILURE".equals(condition)) {
                 rule.setNextRuleOnFailure(targetRule);
             }
+        } else {
+            throw new DSLException("Invalid NEXT_ON format. Expected: '#NEXT_ON_SUCCESS <ruleName>' or '#NEXT_ON_FAILURE <ruleName>'");
         }
     }
     /**
@@ -290,17 +357,24 @@ public class DSLParser {
      * @param rule the rule to update
      * @param line the TIMEOUT directive line
      */
-    private static void parseTimeoutDirective(Rule rule, String line) {
+    private static void parseTimeoutDirective(Rule rule, String line) throws DSLException {
         Matcher m = TIMEOUT_PATTERN.matcher(line);
         if (m.find()) {
-            long value = Long.parseLong(m.group(1));
-            String unit = m.group(2);
-            if ("s".equals(unit)) {
-                rule.setTimeout(value * 1000);
+            try {
+                long value = Long.parseLong(m.group(1));
+                String unit = m.group(2);
+                if ("s".equals(unit)) {
+                    rule.setTimeout(value * 1000);
+                } else if ("ms".equals(unit)) {
+                    rule.setTimeout(value);
+                } else {
+                    throw new DSLException("Invalid time unit in TIMEOUT. Use 'ms' or 's'");
+                }
+            } catch (NumberFormatException e) {
+                throw new DSLException("Invalid number in TIMEOUT directive");
             }
-            if ("ms".equals(unit)) {
-                rule.setTimeout(value);
-            }
+        } else {
+            throw new DSLException("Invalid TIMEOUT format. Expected: '#TIMEOUT <value> <ms|s>'");
         }
     }
     /**
@@ -309,10 +383,12 @@ public class DSLParser {
      * @param rule the rule to update
      * @param line the VERSION directive line
      */
-    private static void parseVersionDirective(Rule rule, String line) {
+    private static void parseVersionDirective(Rule rule, String line) throws DSLException {
         Matcher m = VERSION_PATTERN.matcher(line);
         if (m.find()) {
             rule.setVersion(m.group(1));
+        } else {
+            throw new DSLException("Invalid VERSION format. Expected: '#VERSION <major.minor.patch>'");
         }
     }
     /**
@@ -321,10 +397,16 @@ public class DSLParser {
      * @param rule the rule to update
      * @param line the MAX_EXECUTIONS directive line
      */
-    private static void parseExecutionLimit(Rule rule, String line) {
+    private static void parseExecutionLimit(Rule rule, String line) throws DSLException {
         Matcher m = EXECUTION_LIMIT_PATTERN.matcher(line);
         if (m.find()) {
-            rule.setMaxExecutions(Integer.parseInt(m.group(1)));
+            try {
+                rule.setMaxExecutions(Integer.parseInt(m.group(1)));
+            } catch (NumberFormatException e) {
+                throw new DSLException("Invalid number in MAX_EXECUTIONS directive");
+            }
+        } else {
+            throw new DSLException("Invalid MAX_EXECUTIONS format. Expected: '#MAX_EXECUTIONS <value>'");
         }
     }
     /**
