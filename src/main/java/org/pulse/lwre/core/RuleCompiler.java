@@ -148,7 +148,8 @@ public class RuleCompiler {
             if (!trimmed.isEmpty()) {
                 boolean include = usedMethods.stream().anyMatch(method -> helper.contains(method + "("));
                 if (include) {
-                    combined.append(trimmed).append("\n");
+                    String adjustedHelper = CodeFormatter.adjustHelperMethodAccess(trimmed);
+                    combined.append(adjustedHelper).append("\n");
                 }
             }
         }

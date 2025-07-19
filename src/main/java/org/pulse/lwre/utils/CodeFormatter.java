@@ -142,4 +142,23 @@ public class CodeFormatter {
             sb.append(' ');
         }
     }
+    /**
+     * Adjusts all methods in helper code to be 'public static'
+     * Handles multiple methods
+     * @param helperCode the Java code of the helper block to process
+     * @return the processed helper block
+     */
+    public static String adjustHelperMethodAccess(String helperCode) {
+        // Step 1: Remove existing access modifiers and 'static' only before method declarations
+        String step1 = helperCode.replaceAll(
+                "(?m)^(\\s*)(public|private|protected|static\\b\\s*)+",
+                "$1"
+        );
+
+        // Step 2: Add 'public static' to method declarations, handling various cases
+        return step1.replaceAll(
+                "(?m)^(\\s*)(?!public|private|protected|static|class|interface|enum|@?interface)((?:@\\w+\\s+)*)([\\w.<>,\\s\\[\\]]+\\s+\\w+\\s*\\()",
+                "$1public static $2$3"
+        );
+    }
 }
