@@ -1,7 +1,8 @@
-// RuleCompiler.java
 package org.pulse.lwre.core;
 
-import org.codehaus.janino.ScriptEvaluator;
+import org.codehaus.janino.*;
+import org.codehaus.commons.compiler.CompileException;
+import org.pulse.lwre.utils.CodeFormatter;
 
 import java.io.StringReader;
 import java.util.*;
@@ -61,6 +62,8 @@ public class RuleCompiler {
                 validateScriptSafety(rule);
                 validateHelperSafety(helperBlocks);
                 return doCompileRule(rule, helperBlocks);
+            } catch (RuleCompilationException e) {
+                throw e; // Re-throw our custom exceptions
             } catch (Exception e) {
                 throw new RuleCompilationException("Failed to compile rule: " + rule.getName(), e);
             }
@@ -157,9 +160,9 @@ public class RuleCompiler {
      * @param rule the rule to compile
      * @param helperBlocks the list of helper function blocks
      * @return the compiled rule
-     * @throws Exception if compilation fails
+     * @throws RuleCompilationException if compilation fails
      */
-    private CompiledRule doCompileRule(Rule rule, List<String> helperBlocks) throws Exception {
+    private CompiledRule doCompileRule(Rule rule, List<String> helperBlocks) throws RuleCompilationException {
 
         validateHelperSafety(helperBlocks);
         validateScriptSafety(rule);
@@ -167,23 +170,39 @@ public class RuleCompiler {
         ScriptEvaluator conditionEvaluator = null;
         if (rule.getConditionBlock() != null && !rule.getConditionBlock().trim().isEmpty()) {
             String conditionCode = rule.getConditionBlock();
-            conditionEvaluator = compileEvaluator(rule, helperBlocks, conditionCode, boolean.class);
+            try {
+                conditionEvaluator = compileEvaluator(rule, helperBlocks, conditionCode, boolean.class, "condition");
+            } catch (RuleCompilationException e) {
+                throw new RuleCompilationException("Error in condition block of rule '" + rule.getName() + "': " + e.getMessage(), e);
+            }
         }
 
         ScriptEvaluator actionEvaluator = null;
         if (rule.getActionBlock() != null && !rule.getActionBlock().trim().isEmpty()) {
             String actionCode = buildActionCode(rule);
-            actionEvaluator = compileEvaluator(rule, helperBlocks, actionCode, void.class);
+            try {
+                actionEvaluator = compileEvaluator(rule, helperBlocks, actionCode, void.class, "action");
+            } catch (RuleCompilationException e) {
+                throw new RuleCompilationException("Error in action block of rule '" + rule.getName() + "': " + e.getMessage(), e);
+            }
         }
 
         ScriptEvaluator finalEvaluator = null;
         if (rule.getFinalBlock() != null && !rule.getFinalBlock().trim().isEmpty()) {
-            finalEvaluator = compileEvaluator(rule, helperBlocks, rule.getFinalBlock(), Object.class);
+            try {
+                finalEvaluator = compileEvaluator(rule, helperBlocks, rule.getFinalBlock(), Object.class, "final");
+            } catch (RuleCompilationException e) {
+                throw new RuleCompilationException("Error in final block of rule '" + rule.getName() + "': " + e.getMessage(), e);
+            }
         }
 
         ScriptEvaluator retryEvaluator = null;
         if (rule.getRetryCondition() != null && !rule.getRetryCondition().trim().isEmpty()) {
-            retryEvaluator = compileEvaluator(rule, helperBlocks, rule.getRetryCondition(), boolean.class);
+            try {
+                retryEvaluator = compileEvaluator(rule, helperBlocks, rule.getRetryCondition(), boolean.class, "retry condition");
+            } catch (RuleCompilationException e) {
+                throw new RuleCompilationException("Error in retry condition block of rule '" + rule.getName() + "': " + e.getMessage(), e);
+            }
         }
 
         return new CompiledRule(rule, conditionEvaluator, actionEvaluator, finalEvaluator, retryEvaluator,
@@ -196,10 +215,11 @@ public class RuleCompiler {
      * @param helperBlocks the list of helper function blocks
      * @param block the script block to compile
      * @param returnType the return type of the evaluator
+     * @param blockType the type of block being compiled (for error messages)
      * @return the compiled script evaluator
-     * @throws Exception if compilation fails
+     * @throws RuleCompilationException if compilation fails
      */
-    private ScriptEvaluator compileEvaluator(Rule rule, List<String> helperBlocks, String block, Class<?> returnType) throws Exception {
+    private ScriptEvaluator compileEvaluator(Rule rule, List<String> helperBlocks, String block, Class<?> returnType, String blockType) throws RuleCompilationException {
         StringBuilder code = buildCodeHeader(rule, helperBlocks, block);
 
         code.append(block).append("\n").append("\n");
@@ -207,7 +227,22 @@ public class RuleCompiler {
         ScriptEvaluator evaluator = new ScriptEvaluator();
         evaluator.setParameters(new String[]{"context", "error"}, new Class[]{Map.class, Throwable.class});
         evaluator.setReturnType(returnType);
-        evaluator.cook(new StringReader(code.toString()));
+        try {
+            evaluator.cook(new StringReader(code.toString()));
+        } catch (CompileException e) {
+            // Enhance Janino errors with exact line numbers
+            int lineNumber = e.getLocation() != null ? e.getLocation().getLineNumber()  : -1;
+            int columnNumber = e.getLocation() != null ? e.getLocation().getColumnNumber() : -1;
+            String s = CodeFormatter.formatJavaCode(code.toString());
+            String message = "Compilation error in " + blockType + " block";
+
+            message+=s;
+            message += ": " + e.getMessage();
+
+            throw new RuleCompilationException(message, e);
+        } catch (Exception e) {
+            throw new RuleCompilationException("Error compiling " + blockType + " block: " + e.getMessage(), e);
+        }
         return evaluator;
     }
     /**
@@ -278,7 +313,9 @@ public class RuleCompiler {
 
         Set<String> referenced = new HashSet<>();
         for (String var : candidates) {
-            if (codeBlock.contains(var)) {
+            // Use word boundaries to avoid partial matches
+            Pattern varPattern = Pattern.compile("\\b" + Pattern.quote(var) + "\\b");
+            if (varPattern.matcher(codeBlock).find()) {
                 referenced.add(var);
             }
         }
@@ -296,6 +333,15 @@ public class RuleCompiler {
          */
         public RuleCompilationException(String message, Throwable cause) {
             super(message, cause);
+        }
+
+        /**
+         * Constructs a new {@code RuleCompilationException} with the specified message.
+         *
+         * @param message the error message
+         */
+        public RuleCompilationException(String message) {
+            super(message);
         }
     }
 }
