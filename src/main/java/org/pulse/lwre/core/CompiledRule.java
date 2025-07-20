@@ -1,4 +1,5 @@
 package org.pulse.lwre.core;
+
 import org.codehaus.janino.ScriptEvaluator;
 /*
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,6 +14,7 @@ import org.codehaus.janino.ScriptEvaluator;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /**
  * The {@code CompiledRule} class represents a compiled rule in the Lightweight Rule Engine (LWRE).
  * It encapsulates a {@code Rule} object along with its associated script evaluators for condition,
@@ -29,15 +31,16 @@ public class CompiledRule {
     private final ScriptEvaluator finalEvaluator;
     private final ScriptEvaluator retryEvaluator;
     private final String[] contextKeys;
+
     /**
      * Constructs a new {@code CompiledRule} with the specified rule and evaluators.
      *
-     * @param rule the rule object
+     * @param rule               the rule object
      * @param conditionEvaluator the evaluator for the rule's condition
-     * @param actionEvaluator the evaluator for the rule's action
-     * @param finalEvaluator the evaluator for the rule's final block
-     * @param retryEvaluator the evaluator for the rule's retry logic
-     * @param contextKeys the context keys used in evaluation
+     * @param actionEvaluator    the evaluator for the rule's action
+     * @param finalEvaluator     the evaluator for the rule's final block
+     * @param retryEvaluator     the evaluator for the rule's retry logic
+     * @param contextKeys        the context keys used in evaluation
      */
     public CompiledRule(Rule rule, ScriptEvaluator conditionEvaluator,
                         ScriptEvaluator actionEvaluator, ScriptEvaluator finalEvaluator,
@@ -49,6 +52,7 @@ public class CompiledRule {
         this.retryEvaluator = retryEvaluator;
         this.contextKeys = contextKeys;
     }
+
     /**
      * Retrieves the rule associated with this compiled rule.
      *
@@ -57,6 +61,7 @@ public class CompiledRule {
     public Rule getRule() {
         return rule;
     }
+
     /**
      * Retrieves the script evaluator for the rule's condition.
      *
@@ -65,6 +70,7 @@ public class CompiledRule {
     public ScriptEvaluator getConditionEvaluator() {
         return conditionEvaluator;
     }
+
     /**
      * Retrieves the script evaluator for the rule's action.
      *
@@ -73,6 +79,7 @@ public class CompiledRule {
     public ScriptEvaluator getActionEvaluator() {
         return actionEvaluator;
     }
+
     /**
      * Retrieves the script evaluator for the rule's final block.
      *
@@ -81,6 +88,7 @@ public class CompiledRule {
     public ScriptEvaluator getFinalEvaluator() {
         return finalEvaluator;
     }
+
     /**
      * Retrieves the script evaluator for the rule's retry logic.
      *
@@ -89,6 +97,7 @@ public class CompiledRule {
     public ScriptEvaluator getRetryEvaluator() {
         return retryEvaluator;
     }
+
     /**
      * Retrieves the context keys used during rule evaluation.
      *

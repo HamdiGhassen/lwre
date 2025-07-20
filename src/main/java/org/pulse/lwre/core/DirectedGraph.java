@@ -34,6 +34,7 @@ public class DirectedGraph<T> {
     public DirectedGraph() {
         adjList = new HashMap<>();
     }
+
     /**
      * Adds a vertex to the graph if it does not already exist.
      *
@@ -42,10 +43,11 @@ public class DirectedGraph<T> {
     public void addVertex(T vertex) {
         adjList.putIfAbsent(vertex, new ArrayList<>());
     }
+
     /**
      * Adds a directed edge from a source vertex to a destination vertex, ensuring no duplicate edges.
      *
-     * @param source the source vertex
+     * @param source      the source vertex
      * @param destination the destination vertex
      */
     public void addEdge(T source, T destination) {
@@ -57,6 +59,7 @@ public class DirectedGraph<T> {
             neighbors.add(destination);
         }
     }
+
     /**
      * Retrieves the set of all vertices in the graph.
      *
@@ -65,6 +68,7 @@ public class DirectedGraph<T> {
     public Set<T> getVertices() {
         return adjList.keySet();
     }
+
     /**
      * Retrieves the list of neighbors (outgoing edges) for a given vertex.
      *
@@ -74,6 +78,7 @@ public class DirectedGraph<T> {
     public List<T> getNeighbors(T vertex) {
         return adjList.getOrDefault(vertex, new ArrayList<>());
     }
+
     /**
      * Performs a topological sort of the graph, ordering vertices by priority for rules.
      * Throws an exception if a cycle is detected.
@@ -130,6 +135,7 @@ public class DirectedGraph<T> {
         }
         return sorted;
     }
+
     /**
      * Retrieves the names of root nodes (rules with no rule dependencies and lowest priority).
      *
@@ -171,6 +177,7 @@ public class DirectedGraph<T> {
 
         return rootNames;
     }
+
     /**
      * Retrieves the names of child rules (direct dependents) for a given rule.
      *
@@ -198,6 +205,7 @@ public class DirectedGraph<T> {
 
         return new ArrayList<>(childNames);
     }
+
     /**
      * Retrieves the names of parent rules (rules that depend on the given rule).
      *
@@ -225,11 +233,12 @@ public class DirectedGraph<T> {
 
         return parentNames;
     }
+
     /**
      * Checks if there is a path from a source rule to a destination rule using depth-first search.
      *
      * @param sourceRuleName the name of the source rule
-     * @param destRuleName the name of the destination rule
+     * @param destRuleName   the name of the destination rule
      * @return true if a path exists, false otherwise
      */
     public boolean hasPath(String sourceRuleName, String destRuleName) {
@@ -254,11 +263,12 @@ public class DirectedGraph<T> {
 
         return hasPathDFS(sourceVertex, destVertex, new HashSet<>());
     }
+
     /**
      * Performs a depth-first search to check for a path between two vertices.
      *
      * @param current the current vertex
-     * @param target the target vertex
+     * @param target  the target vertex
      * @param visited the set of visited vertices
      * @return true if a path exists, false otherwise
      */
@@ -279,6 +289,7 @@ public class DirectedGraph<T> {
 
         return false;
     }
+
     /**
      * Prints the graph structure, showing each rule, its priority, and its neighbors.
      */

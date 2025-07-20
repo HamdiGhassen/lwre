@@ -108,10 +108,11 @@ public class RuleGraphProcessor {
 
         return groupGraphs;
     }
+
     /**
      * Identifies the root nodes of a rule group, defined as rules with the lowest priority and no rule dependencies.
      *
-     * @param graph the directed graph of rules
+     * @param graph      the directed graph of rules
      * @param groupRules the list of rules in the group
      * @return a list of root nodes
      */
@@ -140,11 +141,12 @@ public class RuleGraphProcessor {
 
         return rootNodes;
     }
+
     /**
      * Prints the structure of the rule graph for a specific group, including root nodes and dependencies.
      *
      * @param groupName the name of the rule group
-     * @param graph the directed graph of rules
+     * @param graph     the directed graph of rules
      */
     public static void printGraphStructure(String groupName, DirectedGraph<Rule> graph) {
         System.out.println("\n=== Group: " + groupName + " ===");
