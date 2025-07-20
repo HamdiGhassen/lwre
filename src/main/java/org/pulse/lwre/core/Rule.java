@@ -1,5 +1,5 @@
-
 package org.pulse.lwre.core;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -47,6 +47,7 @@ public class Rule {
     private String finalBlock;
     private String retryCondition;
     private List<String> helpers;
+
     /**
      * Constructs a new {@code Rule} with default values and initialized collections.
      */
@@ -65,6 +66,7 @@ public class Rule {
     public String getName() {
         return name;
     }
+
     /**
      * Sets the name of the rule.
      *
@@ -73,6 +75,7 @@ public class Rule {
     public void setName(String name) {
         this.name = name;
     }
+
     /**
      * Retrieves the version of the rule.
      *
@@ -81,6 +84,7 @@ public class Rule {
     public String getVersion() {
         return version;
     }
+
     /**
      * Sets the version of the rule.
      *
@@ -89,6 +93,7 @@ public class Rule {
     public void setVersion(String version) {
         this.version = version;
     }
+
     /**
      * Retrieves the priority of the rule, used for execution ordering.
      *
@@ -97,6 +102,7 @@ public class Rule {
     public int getPriority() {
         return priority;
     }
+
     /**
      * Sets the priority of the rule.
      *
@@ -105,6 +111,7 @@ public class Rule {
     public void setPriority(int priority) {
         this.priority = priority;
     }
+
     /**
      * Retrieves the group to which the rule belongs.
      *
@@ -113,6 +120,7 @@ public class Rule {
     public String getGroup() {
         return group;
     }
+
     /**
      * Sets the group to which the rule belongs.
      *
@@ -121,6 +129,7 @@ public class Rule {
     public void setGroup(String group) {
         this.group = group;
     }
+
     /**
      * Retrieves the maximum number of retries allowed for the rule.
      *
@@ -129,6 +138,7 @@ public class Rule {
     public int getMaxRetries() {
         return maxRetries;
     }
+
     /**
      * Sets the maximum number of retries for the rule.
      *
@@ -137,6 +147,7 @@ public class Rule {
     public void setMaxRetries(int maxRetries) {
         this.maxRetries = maxRetries;
     }
+
     /**
      * Retrieves the retry delay in milliseconds.
      *
@@ -145,6 +156,7 @@ public class Rule {
     public long getRetryDelay() {
         return retryDelay;
     }
+
     /**
      * Sets the retry delay in milliseconds.
      *
@@ -153,6 +165,7 @@ public class Rule {
     public void setRetryDelay(long retryDelay) {
         this.retryDelay = retryDelay;
     }
+
     /**
      * Retrieves the maximum number of executions allowed for the rule.
      *
@@ -161,6 +174,7 @@ public class Rule {
     public int getMaxExecutions() {
         return maxExecutions;
     }
+
     /**
      * Sets the maximum number of executions for the rule.
      *
@@ -169,6 +183,7 @@ public class Rule {
     public void setMaxExecutions(int maxExecutions) {
         this.maxExecutions = maxExecutions;
     }
+
     /**
      * Retrieves the execution timeout in milliseconds.
      *
@@ -177,6 +192,7 @@ public class Rule {
     public long getTimeout() {
         return timeout;
     }
+
     /**
      * Sets the execution timeout in milliseconds.
      *
@@ -185,6 +201,7 @@ public class Rule {
     public void setTimeout(long timeout) {
         this.timeout = timeout;
     }
+
     /**
      * Retrieves the name of the next rule to execute on successful execution.
      *
@@ -193,6 +210,7 @@ public class Rule {
     public String getNextRuleOnSuccess() {
         return nextRuleOnSuccess;
     }
+
     /**
      * Sets the name of the next rule to execute on successful execution.
      *
@@ -210,6 +228,7 @@ public class Rule {
     public String getNextRuleOnFailure() {
         return nextRuleOnFailure;
     }
+
     /**
      * Sets the name of the next rule to execute on failed execution.
      *
@@ -218,6 +237,7 @@ public class Rule {
     public void setNextRuleOnFailure(String nextRuleOnFailure) {
         this.nextRuleOnFailure = nextRuleOnFailure;
     }
+
     /**
      * Retrieves the list of imports used by the rule.
      *
@@ -226,6 +246,7 @@ public class Rule {
     public List<String> getImports() {
         return imports;
     }
+
     /**
      * Sets the list of imports used by the rule.
      *
@@ -234,6 +255,7 @@ public class Rule {
     public void setImports(List<String> imports) {
         this.imports = imports;
     }
+
     /**
      * Retrieves the map of variables produced by the rule.
      *
@@ -242,6 +264,7 @@ public class Rule {
     public Map<String, String> getProduces() {
         return produces;
     }
+
     /**
      * Sets the map of variables produced by the rule.
      *
@@ -250,6 +273,7 @@ public class Rule {
     public void setProduces(Map<String, String> produces) {
         this.produces = produces;
     }
+
     /**
      * Retrieves the map of variables used by the rule.
      *
@@ -258,6 +282,7 @@ public class Rule {
     public Map<String, UseVariable> getUses() {
         return uses;
     }
+
     /**
      * Sets the map of variables used by the rule.
      *
@@ -266,6 +291,7 @@ public class Rule {
     public void setUses(Map<String, UseVariable> uses) {
         this.uses = uses;
     }
+
     /**
      * Retrieves the condition block script of the rule.
      *
@@ -292,6 +318,7 @@ public class Rule {
     public String getActionBlock() {
         return action;
     }
+
     /**
      * Sets the action block script of the rule.
      *
@@ -300,6 +327,7 @@ public class Rule {
     public void setActionBlock(String action) {
         this.action = action;
     }
+
     /**
      * Retrieves the final block script of the rule.
      *
@@ -308,6 +336,7 @@ public class Rule {
     public String getFinalBlock() {
         return finalBlock;
     }
+
     /**
      * Sets the final block script of the rule.
      *
@@ -316,6 +345,7 @@ public class Rule {
     public void setFinalBlock(String finalBlock) {
         this.finalBlock = finalBlock;
     }
+
     /**
      * Retrieves the retry condition script of the rule.
      *
@@ -324,6 +354,7 @@ public class Rule {
     public String getRetryCondition() {
         return retryCondition;
     }
+
     /**
      * Sets the retry condition script of the rule.
      *
@@ -332,6 +363,7 @@ public class Rule {
     public void setRetryCondition(String retryCondition) {
         this.retryCondition = retryCondition;
     }
+
     /**
      * Retrieves the list of helper functions used by the rule.
      *
@@ -340,6 +372,7 @@ public class Rule {
     public List<String> getHelpers() {
         return helpers;
     }
+
     /**
      * Sets the list of helper functions used by the rule.
      *
@@ -348,17 +381,18 @@ public class Rule {
     public void setHelpers(List<String> helpers) {
         this.helpers = helpers;
     }
+
     /**
      * Creates a deep copy of the rule, including all its properties and collections.
      *
      * @return a cloned rule instance
      */
     public Rule clone() {
-        Rule cloned ;
+        Rule cloned;
         try {
-             cloned = (Rule) super.clone();
+            cloned = (Rule) super.clone();
         } catch (CloneNotSupportedException e) {
-             cloned = new Rule();
+            cloned = new Rule();
         }
 
 
@@ -390,6 +424,7 @@ public class Rule {
         cloned.setRetryCondition(this.retryCondition);
         return cloned;
     }
+
     /**
      * Returns a string representation of the rule, including all its properties.
      *
@@ -417,6 +452,7 @@ public class Rule {
                 ", retryCondition='" + retryCondition + '\'' +
                 '}';
     }
+
     /**
      * Inner class representing a variable used by the rule, specifying its name, source, and type.
      */
@@ -425,13 +461,14 @@ public class Rule {
         private final String source;
         private final String sourceId;
         private final String className;
+
         /**
          * Constructs a new {@code UseVariable} with the specified properties.
          *
          * @param variableName the name of the variable
-         * @param source the source of the variable (e.g., "Global" or "RULE")
-         * @param sourceId the identifier of the source
-         * @param className the class name of the variable type
+         * @param source       the source of the variable (e.g., "Global" or "RULE")
+         * @param sourceId     the identifier of the source
+         * @param className    the class name of the variable type
          */
         public UseVariable(String variableName, String source, String sourceId, String className) {
             this.variableName = variableName;
@@ -439,6 +476,7 @@ public class Rule {
             this.sourceId = sourceId;
             this.className = className;
         }
+
         /**
          * Retrieves the name of the variable.
          *
@@ -447,6 +485,7 @@ public class Rule {
         public String getVariableName() {
             return variableName;
         }
+
         /**
          * Retrieves the source of the variable.
          *
@@ -455,6 +494,7 @@ public class Rule {
         public String getSource() {
             return source;
         }
+
         /**
          * Retrieves the identifier of the variable source.
          *
@@ -463,6 +503,7 @@ public class Rule {
         public String getSourceId() {
             return sourceId;
         }
+
         /**
          * Retrieves the class name of the variable type.
          *
@@ -471,6 +512,7 @@ public class Rule {
         public String getClassName() {
             return className;
         }
+
         /**
          * Returns a string representation of the variable.
          *

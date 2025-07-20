@@ -1,14 +1,14 @@
 package org.pulse.lwre.core;
 
 import org.pulse.lwre.dsl.DSLParser;
-import org.pulse.lwre.metric.Context;
 import org.pulse.lwre.metric.Meter;
 import org.pulse.lwre.metric.MetricRegistry;
 
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ForkJoinPool;
 import java.util.stream.Collectors;
-
 /*
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,441 +22,366 @@ import java.util.stream.Collectors;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- /** The {@code LWREngine} class implements a lightweight rule engine for executing business rules
- * defined in a domain-specific language (DSL). It supports rule compilation, dependency graph
- * construction, parallel execution, and metrics collection. The engine manages rule execution
- * contexts, global variables, and circuit breaking to ensure robust performance under load.
- * Rules are organized into groups, and the engine supports rule versioning, rollback, and
- * execution tracing for debugging purposes.
- *
- * <p>The engine uses a directed graph to model rule dependencies and employs a work-stealing
- * thread pool for efficient parallel execution. It also provides a context pool for managing
- * evaluation contexts and a circuit breaker to prevent overload. Metrics are collected to monitor
- * rule execution performance, including condition evaluation, action execution, and error rates.
- *
- * <p>The class is designed to be thread-safe, with concurrent data structures such as
- * {@code ConcurrentHashMap} and {@code CopyOnWriteArrayList} used for managing rules, variables,
- * and execution state. It also supports cloning for creating independent instances of the engine.
+
+/**
+ * The {@code LWREngine} class is the core execution engine for the Lightweight Rule Engine (LWRE).
+ * It manages the execution of compiled rules, organizes them by groups, and optimizes their execution
+ * paths using precomputed dependency graphs. The engine supports thread-safe operations, context pooling,
+ * circuit breaking, and metrics collection. It provides methods to add, update, and rollback rules, as well
+ * as execute them in a controlled manner. The implementation is designed for high performance and scalability,
+ * utilizing a {@code ForkJoinPool} for parallel execution and a {@code ConcurrentHashMap} for thread-safe data
+ * structures.
  *
  * @author Hamdi Ghassen
  */
 public class LWREngine implements Cloneable {
-    private final Map<String, List<String>> groupHelpers = new ConcurrentHashMap<>();
+    private static final ThreadLocal<Queue<Map<String, Object>>> THREAD_LOCAL_CONTEXT_POOL =
+            ThreadLocal.withInitial(() -> new ArrayDeque<>(500)); // Pre-size for better performance
+    private static final ForkJoinPool EXECUTION_POOL = new ForkJoinPool(
+            Runtime.getRuntime().availableProcessors(),
+            ForkJoinPool.defaultForkJoinWorkerThreadFactory,
+            null, true);
+    private final Map<String, CompiledRule[]> precomputedExecutionPaths = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Integer>> ruleNameToIndexPerGroup = new ConcurrentHashMap<>();
+    private final Map<String, String[]> groupHelpers = new ConcurrentHashMap<>();
     private final Map<String, Object> globalVariables = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> ruleOutputs = new ConcurrentHashMap<>();
     private final List<CompiledRule> compiledRules = new ArrayList<>();
     private final RuleCompiler compiler = new RuleCompiler();
     private final Map<String, Rule> ruleVersions = new ConcurrentHashMap<>();
-
-
-    private final Queue<Map<String, Object>> contextPool = new ArrayDeque<>();
-    private final ExecutorService executor = Executors.newWorkStealingPool();
     private final CircuitBreaker circuitBreaker = new CircuitBreaker(5, 30_000);
     private final MetricRegistry metrics = new MetricRegistry();
-    private final Map<String, DirectedGraph<CompiledRule>> groupGraphs = new ConcurrentHashMap<>();
-    private final Map<String, List<CompiledRule>> compiledRulesByGroup = new ConcurrentHashMap<>();
-    private final Map<String, List<CompiledRule>> cachedExecutionPaths = new ConcurrentHashMap<>();
-    private boolean traceEnabled = false;
-    private int maxExecutionSteps = 1000;
-    private Map<String, Map<CompiledRule, Integer>> initialInDegreePerGroup = new ConcurrentHashMap<>();
-    private Map<String, List<CompiledRule>> rootRulesPerGroup = new ConcurrentHashMap<>();
-    private Map<String, Map<String, CompiledRule>> ruleByNamePerGroup = new ConcurrentHashMap<>();
+    private final Map<String, CompiledRule[]> compiledRulesByGroup = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, CompiledRule>> ruleByNamePerGroup = new ConcurrentHashMap<>();
+    private final Map<String, int[][]> dependencyMatrixPerGroup = new ConcurrentHashMap<>();
+    private final Map<String, CompiledRule[]> rootRulesPerGroup = new ConcurrentHashMap<>();
+    private volatile boolean traceEnabled = false;
+    private volatile int maxExecutionSteps = 1000;
+    private volatile boolean metric = false;
+    private volatile Object localResult = null;
 
+    /**
+     * Private constructor to enforce use of Builder pattern.
+     */
     private LWREngine() {
     }
+
     /**
-     * Retrieves the context pool used for managing evaluation contexts.
+     * Retrieves the thread-local context pool.
      *
-     * @return the queue of context maps
+     * @return the context pool
      */
     public Queue<Map<String, Object>> getContextPool() {
-        return contextPool;
+        return THREAD_LOCAL_CONTEXT_POOL.get();
     }
+
     /**
-     * Enables or disables tracing for rule execution debugging.
+     * Enables or disables execution tracing.
      *
-     * @param enable true to enable tracing, false to disable
+     * @param enable true to enable tracing, false otherwise
      */
     public void enableTrace(boolean enable) {
         this.traceEnabled = enable;
     }
+
     /**
-     * Sets the maximum number of execution steps allowed for rule processing.
+     * Sets the maximum number of execution steps allowed.
      *
      * @param steps the maximum number of steps
      */
     public void setMaxExecutionSteps(int steps) {
         this.maxExecutionSteps = steps;
     }
+
     /**
-     * Sets a global variable that can be used across rule executions.
+     * Sets a global variable accessible to all rules.
      *
-     * @param name the name of the variable
-     * @param value the value of the variable
+     * @param name  the variable name
+     * @param value the variable value
      */
     public void setGlobalVariable(String name, Object value) {
         if (value != null) {
             globalVariables.put(name, value);
         }
     }
+
     /**
-     * Retrieves the value of a global variable.
+     * Retrieves a global variable by name.
      *
-     * @param name the name of the variable
-     * @return the value of the variable, or null if not found
+     * @param name the variable name
+     * @return the variable value, or null if not found
      */
     public Object getGlobalVariable(String name) {
         return globalVariables.get(name);
     }
+
     /**
-     * Adds a single rule to the engine and updates the dependency graph.
+     * Adds a single rule to the engine and recompiles group structures.
      *
      * @param rule the rule to add
      * @throws Exception if rule compilation fails
      */
     public void addRule(Rule rule) throws Exception {
-
-        CompiledRule compiledRule = compiler.compileRule(rule, rule.getHelpers());
+        CompiledRule compiledRule = compiler.compileRule(rule,
+                Arrays.asList(groupHelpers.getOrDefault(rule.getGroup(), new String[0])));
         compiledRules.add(compiledRule);
         ruleVersions.put(rule.getName() + "_" + rule.getVersion(), rule.clone());
 
-        compiledRulesByGroup.computeIfAbsent(rule.getGroup(), k -> new CopyOnWriteArrayList<>())
-                .add(compiledRule);
-        buildDependencyGraphs();
+        // Rebuild group structures
+        rebuildGroupStructures();
     }
+
     /**
-     * Adds multiple rules from a DSL content string and updates the dependency graph.
+     * Adds multiple rules from a DSL content string and recompiles group structures.
      *
      * @param dslContent the DSL content containing rules and helpers
-     * @throws Exception if parsing or compilation fails
+     * @throws Exception if rule parsing or compilation fails
      */
     public void addRules(String dslContent) throws Exception {
         DSLParser.ParseResult parseResult = DSLParser.parseRules(dslContent);
 
-        Map<String, List<String>> groupHelperMap = new HashMap<>();
+        // Convert helpers to arrays for better performance
+        Map<String, String[]> groupHelperMap = new HashMap<>();
         for (Rule rule : parseResult.getRules()) {
-            groupHelperMap.computeIfAbsent(rule.getGroup(), k -> new ArrayList<>())
-                    .addAll(parseResult.getHelpers());
+            List<String> helpers = parseResult.getHelpers();
+            groupHelperMap.put(rule.getGroup(), helpers.toArray(new String[0]));
         }
+        groupHelpers.putAll(groupHelperMap);
 
-        for (Map.Entry<String, List<String>> entry : groupHelperMap.entrySet()) {
-            groupHelpers.put(entry.getKey(), entry.getValue());
-        }
-
+        // Compile all rules
         for (Rule rule : parseResult.getRules()) {
-            List<String> groupHelpers = this.groupHelpers.getOrDefault(rule.getGroup(), Collections.emptyList());
-            CompiledRule compiledRule = compiler.compileRule(rule, groupHelpers);
+            String[] helpers = groupHelpers.getOrDefault(rule.getGroup(), new String[0]);
+            CompiledRule compiledRule = compiler.compileRule(rule, Arrays.asList(helpers));
             compiledRules.add(compiledRule);
             ruleVersions.put(rule.getName() + "_" + rule.getVersion(), rule.clone());
-
-
-            compiledRulesByGroup.computeIfAbsent(rule.getGroup(), k -> new CopyOnWriteArrayList<>())
-                    .add(compiledRule);
         }
-        buildDependencyGraphs();
+
+        rebuildGroupStructures();
     }
+
     /**
-     * Builds dependency graphs for all rule groups to determine execution order.
+     * Rebuilds group structures and precomputes execution paths for all rule groups.
      */
-    private void buildDependencyGraphs() {
-        initialInDegreePerGroup.clear();
-        rootRulesPerGroup.clear();
+    private void rebuildGroupStructures() {
+        precomputedExecutionPaths.clear();
+        ruleNameToIndexPerGroup.clear();
+        compiledRulesByGroup.clear();
         ruleByNamePerGroup.clear();
-        groupGraphs.clear();
+        dependencyMatrixPerGroup.clear();
+        rootRulesPerGroup.clear();
 
-        List<Rule> allRules = compiledRules.stream()
-                .map(CompiledRule::getRule)
-                .collect(Collectors.toList());
+        // Group rules by their group names
+        Map<String, List<CompiledRule>> tempGroupMap = new HashMap<>();
+        for (CompiledRule cr : compiledRules) {
+            tempGroupMap.computeIfAbsent(cr.getRule().getGroup(), k -> new ArrayList<>()).add(cr);
+        }
 
-        Map<String, DirectedGraph<Rule>> ruleGraphsByGroup = RuleGraphProcessor.processRules(allRules);
-
-        for (Map.Entry<String, List<CompiledRule>> entry : compiledRulesByGroup.entrySet()) {
+        // Process each group
+        for (Map.Entry<String, List<CompiledRule>> entry : tempGroupMap.entrySet()) {
             String group = entry.getKey();
             List<CompiledRule> groupRules = entry.getValue();
-            DirectedGraph<Rule> ruleGraph = ruleGraphsByGroup.get(group);
 
-            if (ruleGraph == null) {
-                groupGraphs.put(group, new DirectedGraph<>());
-                continue;
+            // Convert to arrays for better performance
+            CompiledRule[] rulesArray = groupRules.toArray(new CompiledRule[0]);
+            compiledRulesByGroup.put(group, rulesArray);
+
+            // Build name-to-rule mapping
+            Map<String, CompiledRule> nameMap = new HashMap<>();
+            Map<String, Integer> indexMap = new HashMap<>();
+            for (int i = 0; i < rulesArray.length; i++) {
+                CompiledRule rule = rulesArray[i];
+                nameMap.put(rule.getRule().getName(), rule);
+                indexMap.put(rule.getRule().getName(), i);
             }
+            ruleByNamePerGroup.put(group, nameMap);
+            ruleNameToIndexPerGroup.put(group, indexMap);
 
-            Map<String, CompiledRule> ruleNameToCompiled = new HashMap<>();
-            for (CompiledRule cr : groupRules) {
-                ruleNameToCompiled.put(cr.getRule().getName(), cr);
-            }
-            ruleByNamePerGroup.put(group, ruleNameToCompiled);
+            // Pre-compute execution path
+            precomputeExecutionPath(group, rulesArray, nameMap);
+        }
+    }
 
-            DirectedGraph<CompiledRule> compiledRuleGraph = new DirectedGraph<>();
-            for (Rule rule : ruleGraph.getVertices()) {
-                CompiledRule compiledRule = ruleNameToCompiled.get(rule.getName());
-                if (compiledRule != null) {
-                    compiledRuleGraph.addVertex(compiledRule);
-                }
-            }
+    /**
+     * Precomputes the optimal execution path for a rule group to avoid runtime graph traversal.
+     *
+     * @param group   the rule group
+     * @param rules   the compiled rules in the group
+     * @param nameMap mapping of rule names to compiled rules
+     */
+    private void precomputeExecutionPath(String group, CompiledRule[] rules, Map<String, CompiledRule> nameMap) {
+        List<Rule> ruleList = Arrays.stream(rules).map(CompiledRule::getRule).collect(Collectors.toList());
+        Map<String, DirectedGraph<Rule>> ruleGraphsByGroup = RuleGraphProcessor.processRules(ruleList);
+        DirectedGraph<Rule> ruleGraph = ruleGraphsByGroup.get(group);
 
-            for (Rule rule : ruleGraph.getVertices()) {
-                CompiledRule source = ruleNameToCompiled.get(rule.getName());
-                if (source != null) {
-                    for (Rule neighbor : ruleGraph.getNeighbors(rule)) {
-                        CompiledRule target = ruleNameToCompiled.get(neighbor.getName());
-                        if (target != null) {
-                            compiledRuleGraph.addEdge(source, target);
-                        }
+        if (ruleGraph == null) {
+            precomputedExecutionPaths.put(group, new CompiledRule[0]);
+            rootRulesPerGroup.put(group, new CompiledRule[0]);
+            return;
+        }
+
+        int n = rules.length;
+        int[][] depMatrix = new int[n][n];
+        Map<String, Integer> nameToIndex = ruleNameToIndexPerGroup.get(group);
+
+        for (Rule rule : ruleGraph.getVertices()) {
+            Integer sourceIdx = nameToIndex.get(rule.getName());
+            if (sourceIdx != null) {
+                for (Rule neighbor : ruleGraph.getNeighbors(rule)) {
+                    Integer targetIdx = nameToIndex.get(neighbor.getName());
+                    if (targetIdx != null) {
+                        depMatrix[sourceIdx][targetIdx] = 1;
                     }
                 }
             }
-
-            groupGraphs.put(group, compiledRuleGraph);
-
-            Map<CompiledRule, Integer> inDegreeMap = new HashMap<>();
-            for (CompiledRule vertex : compiledRuleGraph.getVertices()) {
-                inDegreeMap.put(vertex, 0);
-            }
-            for (CompiledRule u : compiledRuleGraph.getVertices()) {
-                for (CompiledRule v : compiledRuleGraph.getNeighbors(u)) {
-                    inDegreeMap.put(v, inDegreeMap.get(v) + 1);
-                }
-            }
-            initialInDegreePerGroup.put(group, inDegreeMap);
-
-            List<CompiledRule> rootRules = new ArrayList<>();
-            for (CompiledRule vertex : compiledRuleGraph.getVertices()) {
-                if (inDegreeMap.get(vertex) == 0) {
-                    rootRules.add(vertex);
-                }
-            }
-            rootRules.sort(Comparator.comparingInt(cr -> cr.getRule().getPriority()));
-            rootRulesPerGroup.put(group, rootRules);
         }
+        dependencyMatrixPerGroup.put(group, depMatrix);
+        List<CompiledRule> rootRules = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            boolean hasIncoming = false;
+            for (int j = 0; j < n; j++) {
+                if (depMatrix[j][i] == 1) {
+                    hasIncoming = true;
+                    break;
+                }
+            }
+            if (!hasIncoming) {
+                rootRules.add(rules[i]);
+            }
+        }
+
+        rootRules.sort(Comparator.comparingInt(cr -> cr.getRule().getPriority()));
+        rootRulesPerGroup.put(group, rootRules.toArray(new CompiledRule[0]));
+        CompiledRule[] executionPath = computeTopologicalOrder(rules, depMatrix, nameToIndex);
+        precomputedExecutionPaths.put(group, executionPath);
     }
+
     /**
-     * Executes rules for a specific group.
+     * Computes a topological order of rules using Kahn's algorithm for efficient execution.
      *
-     * @param group the group name
-     * @return the final result of the rule execution
-     * @throws RuleExecutionException if no rules are found or execution fails
+     * @param rules       the compiled rules
+     * @param depMatrix   the dependency matrix
+     * @param nameToIndex mapping of rule names to indices
+     * @return the ordered array of compiled rules
+     */
+    private CompiledRule[] computeTopologicalOrder(CompiledRule[] rules, int[][] depMatrix,
+                                                   Map<String, Integer> nameToIndex) {
+        int n = rules.length;
+        int[] inDegree = new int[n];
+
+        // Calculate in-degrees
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                if (depMatrix[i][j] == 1) {
+                    inDegree[j]++;
+                }
+            }
+        }
+
+        Queue<Integer> queue = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            if (inDegree[i] == 0) {
+                queue.add(i);
+            }
+        }
+
+        List<CompiledRule> result = new ArrayList<>();
+        while (!queue.isEmpty()) {
+            int current = queue.poll();
+            result.add(rules[current]);
+
+            for (int i = 0; i < n; i++) {
+                if (depMatrix[current][i] == 1) {
+                    inDegree[i]--;
+                    if (inDegree[i] == 0) {
+                        queue.add(i);
+                    }
+                }
+            }
+        }
+
+        return result.toArray(new CompiledRule[0]);
+    }
+
+    /**
+     * Executes all rules in a specified group.
+     *
+     * @param group the rule group to execute
+     * @return the final result of the execution
+     * @throws RuleExecutionException if execution fails
      */
     public Object executeRules(String group) throws RuleExecutionException {
-        if (groupGraphs.size() == 0) {
+        if (precomputedExecutionPaths.isEmpty()) {
             throw new RuleExecutionException("Nothing to run");
         }
-        return executeRules(group, UUID.randomUUID().toString());
+        return executeRules(group, "EXEC" + System.nanoTime());
     }
 
-    Object localResult = null;
     /**
-     * Executes rules for all groups in parallel.
+     * Executes all rules across all groups, using parallel execution if multiple groups exist.
      *
-     * @return the result of the last executed group
-     * @throws RuleExecutionException if no rules are found or execution fails
+     * @return the final result of the execution
+     * @throws RuleExecutionException if execution fails
      */
     public Object executeRules() throws RuleExecutionException {
-
-        if (groupGraphs.size() == 0) {
+        if (precomputedExecutionPaths.isEmpty()) {
             throw new RuleExecutionException("Nothing to run");
         }
-        groupGraphs.keySet().parallelStream().forEach(group -> {
-            try {
-                localResult = executeRules(group, UUID.randomUUID().toString());
-            } catch (RuleExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
+
+        Set<String> groups = precomputedExecutionPaths.keySet();
+        if (groups.size() == 1) {
+            localResult = executeRules(groups.iterator().next(), "EXEC" + System.nanoTime());
+        } else {
+            // Use ForkJoinPool for better parallel performance
+            CompletableFuture<Object>[] futures = groups.stream()
+                    .map(group -> CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return executeRules(group, UUID.randomUUID().toString());
+                        } catch (RuleExecutionException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }, EXECUTION_POOL))
+                    .toArray(CompletableFuture[]::new);
+
+            CompletableFuture.allOf(futures).join();
+            // Return the last completed result
+            localResult = futures[futures.length - 1].join();
+        }
         return localResult;
     }
+
     /**
-     * Caches the execution path for a specific group based on rule dependencies.
+     * Executes rules in a specific group with a given execution ID.
      *
-     * @param group the group name
-     * @throws RuleExecutionException if no rules are found for the group
+     * @param group       the rule group
+     * @param executionId the unique execution ID
+     * @return the final result of the execution
+     * @throws RuleExecutionException if execution fails
      */
-    private void cacheExecutionPath(String group) throws RuleExecutionException {
-        DirectedGraph<CompiledRule> graph = groupGraphs.get(group);
-        if (graph == null) {
+    private Object executeRules(String group, String executionId) throws RuleExecutionException {
+        CompiledRule[] executionPath = precomputedExecutionPaths.get(group);
+        if (executionPath == null || executionPath.length == 0) {
             throw new RuleExecutionException("No rules found for group: " + group);
         }
 
-        Map<CompiledRule, Integer> inDegreeMap = new HashMap<>();
-        for (CompiledRule vertex : graph.getVertices()) {
-            inDegreeMap.put(vertex, 0);
-        }
-        for (CompiledRule u : graph.getVertices()) {
-            for (CompiledRule v : graph.getNeighbors(u)) {
-                inDegreeMap.put(v, inDegreeMap.get(v) + 1);
-            }
-        }
-
-        List<CompiledRule> rootRules = new ArrayList<>();
-        for (CompiledRule vertex : graph.getVertices()) {
-            if (inDegreeMap.get(vertex) == 0) {
-                rootRules.add(vertex);
-            }
-        }
-        rootRules.sort(Comparator.comparingInt(cr -> cr.getRule().getPriority()));
-        cachedExecutionPaths.put(group, rootRules);
-    }
-    /**
-     * Executes rules for a specific group with a given execution ID.
-     *
-     * @param group the group name
-     * @param executionId the unique execution ID
-     * @return the final result of the rule execution
-     * @throws RuleExecutionException if no rules are found or execution fails
-     */
-    public Object executeRules(String group, String executionId) throws RuleExecutionException {
         RuleExecutionContext executionContext = new RuleExecutionContext(executionId);
         Object finalResult = null;
 
-        DirectedGraph<CompiledRule> graph = groupGraphs.get(group);
-        if (graph == null) {
-            throw new RuleExecutionException("No rules found for group: " + group);
-        }
-
-        Map<CompiledRule, Integer> inDegreeMap = new HashMap<>(initialInDegreePerGroup.get(group));
-        List<CompiledRule> rootRules = new ArrayList<>(rootRulesPerGroup.get(group));
-        Map<String, CompiledRule> ruleMap = ruleByNamePerGroup.get(group);
-
-        Queue<CompiledRule> queue = new LinkedList<>(rootRules);
-        Set<CompiledRule> executed = ConcurrentHashMap.newKeySet();
-
-
-        while (!queue.isEmpty()) {
-            CompiledRule current = queue.poll();
-            if (executed.contains(current)) continue;
-
-            RuleOutcome outcome = executeSingleRule(current, executionContext);
-            executed.add(current);
-
+        for (CompiledRule rule : executionPath) {
+            RuleOutcome outcome = executeSingleRule(rule, executionContext);
             if (outcome.finalResult != null) {
                 finalResult = outcome.finalResult;
-            }
-
-            for (CompiledRule child : graph.getNeighbors(current)) {
-                int newDegree = inDegreeMap.get(child) - 1;
-                inDegreeMap.put(child, newDegree);
-                if (newDegree == 0) {
-                    queue.add(child);
-                }
-            }
-
-            String nextRuleName = outcome.success ?
-                    current.getRule().getNextRuleOnSuccess() :
-                    current.getRule().getNextRuleOnFailure();
-            if (nextRuleName != null) {
-                CompiledRule nextRule = ruleMap.get(nextRuleName);
-                if (nextRule != null && !executed.contains(nextRule)) {
-                    int newDegree = inDegreeMap.get(nextRule) - 1;
-                    inDegreeMap.put(nextRule, newDegree);
-                    if (newDegree == 0) {
-                        queue.add(nextRule);
-                    }
-                }
             }
         }
 
         clearCache();
         return finalResult;
     }
+
     /**
-     * Executes a rule and its dependencies, updating the execution context.
-     *
-     * @param rule the rule to execute
-     * @param graph the dependency graph
-     * @param context the execution context
-     * @param executed the set of executed rules
-     * @param inDegreeMap the map of in-degrees for dependency tracking
-     * @return the outcome of the rule execution
-     */
-    private RuleOutcome executeRuleWithDependencies(CompiledRule rule,
-                                                    DirectedGraph<CompiledRule> graph,
-                                                    RuleExecutionContext context,
-                                                    Set<CompiledRule> executed,
-                                                    Map<CompiledRule, Integer> inDegreeMap) {
-        final Object[] finalResult = {null};
-        Queue<CompiledRule> queue = new LinkedList<>();
-        queue.add(rule);
-
-        while (!queue.isEmpty()) {
-            CompiledRule current = queue.poll();
-            if (executed.contains(current)) continue;
-            if (inDegreeMap.get(current) > 0) {
-                queue.add(current);
-                continue;
-            }
-
-            RuleOutcome outcome = executeSingleRule(current, context);
-            executed.add(current);
-
-            if (outcome.finalResult != null) {
-                finalResult[0] = outcome.finalResult;
-            }
-
-            for (CompiledRule child : graph.getNeighbors(current)) {
-                int newDegree = inDegreeMap.get(child) - 1;
-                inDegreeMap.put(child, newDegree);
-
-                if (newDegree == 0 && !executed.contains(child)) {
-                    queue.add(child);
-                }
-            }
-
-            String nextRuleName = outcome.success ?
-                    current.getRule().getNextRuleOnSuccess() :
-                    current.getRule().getNextRuleOnFailure();
-
-            if (nextRuleName != null) {
-                compiledRulesByGroup.get(current.getRule().getGroup()).stream()
-                        .filter(cr -> cr.getRule().getName().equals(nextRuleName))
-                        .findFirst()
-                        .ifPresent(nextRule -> {
-                            if (!executed.contains(nextRule)) {
-                                int newDegree = inDegreeMap.get(nextRule) - 1;
-                                inDegreeMap.put(nextRule, newDegree);
-
-                                if (newDegree == 0) {
-                                    queue.add(nextRule);
-                                }
-                            }
-                        });
-            }
-        }
-
-        return new RuleOutcome(finalResult[0], true);
-    }
-    /**
-     * Adds the next rules to the execution queue based on the success or failure of the current rule.
-     *
-     * @param current the current rule
-     * @param success whether the rule executed successfully
-     * @param queue the queue of rules to execute
-     * @param executed the set of executed rules
-     */
-    private void addNextRules(
-            CompiledRule current,
-            boolean success,
-            Queue<CompiledRule> queue,
-            Set<CompiledRule> executed
-    ) {
-        String nextRuleName = success ?
-                current.getRule().getNextRuleOnSuccess() :
-                current.getRule().getNextRuleOnFailure();
-
-        if (nextRuleName != null) {
-            compiledRulesByGroup.get(current.getRule().getGroup()).stream()
-                    .filter(cr -> cr.getRule().getName().equals(nextRuleName))
-                    .findFirst()
-                    .ifPresent(nextRule -> {
-                        if (!executed.contains(nextRule)) {
-                            queue.add(nextRule);
-                        }
-                    });
-        }
-    }
-    /**
-     * Executes a single rule, evaluating its condition and action, and handling retries and errors.
+     * Executes a single rule within the given execution context.
      *
      * @param compiledRule the compiled rule to execute
-     * @param context the execution context
+     * @param context      the execution context
      * @return the outcome of the rule execution
      */
     private RuleOutcome executeSingleRule(CompiledRule compiledRule,
@@ -468,17 +393,14 @@ public class LWREngine implements Cloneable {
 
         if (state.getExecutionCount() >= rule.getMaxExecutions()) {
             if (traceEnabled) {
-                System.out.println("Skipping rule " + rule.getName() +
-                        " (max executions reached)");
+                System.out.println("Skipping rule " + rule.getName() + " (max executions reached)");
             }
             return new RuleOutcome(finalResult, success);
         }
 
         if (state.getRetryCount() > 0 && !state.shouldRetry(rule)) {
             if (traceEnabled) {
-                System.out.println("Delaying retry for rule " + rule.getName() +
-                        " (retry " + state.getRetryCount() + "/" +
-                        rule.getMaxRetries() + ")");
+                System.out.println("Delaying retry for rule " + rule.getName());
             }
             return new RuleOutcome(finalResult, false);
         }
@@ -490,21 +412,15 @@ public class LWREngine implements Cloneable {
                 throw new EngineOverloadException("Circuit breaker tripped");
             }
 
-            Context conditionTimer = metrics.timer(rule.getName() + ".condition").time();
+            // Optimized condition evaluation
             boolean conditionResult = evaluateCondition(compiledRule, context);
-            conditionTimer.close();
 
             if (conditionResult) {
-
                 state.incrementExecutionCount();
-                Context actionTimer = metrics.timer(rule.getName() + ".action").time();
                 executeAction(compiledRule, context);
-                actionTimer.close();
 
                 if (compiledRule.getFinalEvaluator() != null) {
-                    Context finalTimer = metrics.timer(rule.getName() + ".final").time();
                     finalResult = executeFinalBlock(compiledRule, context);
-                    finalTimer.close();
                 }
 
                 state.resetRetryCount();
@@ -513,40 +429,37 @@ public class LWREngine implements Cloneable {
                 if (traceEnabled) {
                     System.out.println("Rule executed successfully: " + rule.getName());
                 }
-            } else {
-
-                if (traceEnabled) {
-                    System.out.println("Rule condition false: " + rule.getName());
-                }
+            } else if (traceEnabled) {
+                System.out.println("Rule condition false: " + rule.getName());
             }
         } catch (Exception e) {
-            metrics.meter(rule.getName() + ".errors").mark();
+            if (metric) {
+                metrics.meter(rule.getName() + ".errors").mark();
+            }
+
             state.setLastError(e);
             state.incrementRetryCount();
-
-            if (state.getRetryCount() <= rule.getMaxRetries()) {
-
-                if (traceEnabled) {
-                    System.out.println("Rule execution failed, will retry: " + rule.getName());
-                    e.printStackTrace();
-                }
-            } else {
-                if (traceEnabled) {
-                    System.out.println("Rule failed permanently: " + rule.getName());
-                    e.printStackTrace();
-                }
-            }
             success = false;
+
+            if (traceEnabled) {
+                if (state.getRetryCount() <= rule.getMaxRetries()) {
+                    System.out.println("Rule execution failed, will retry: " + rule.getName());
+                } else {
+                    System.out.println("Rule failed permanently: " + rule.getName());
+                }
+                e.printStackTrace();
+            }
         }
 
         return new RuleOutcome(finalResult, success);
     }
+
     /**
-     * Evaluates the condition of a compiled rule.
+     * Evaluates the condition block of a compiled rule.
      *
      * @param compiledRule the compiled rule
-     * @param context the execution context
-     * @return true if the condition is satisfied, false otherwise
+     * @param context      the execution context
+     * @return true if the condition evaluates to true, false otherwise
      * @throws Exception if evaluation fails
      */
     private boolean evaluateCondition(CompiledRule compiledRule,
@@ -556,21 +469,18 @@ public class LWREngine implements Cloneable {
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
-            Future<Boolean> future = executor.submit(() ->
-                    (Boolean) compiledRule.getConditionEvaluator().evaluate(
-                            new Object[]{evalContext, null}));
-
-            return future.get(compiledRule.getRule().getTimeout(), TimeUnit.MILLISECONDS);
+            return (Boolean) compiledRule.getConditionEvaluator().evaluate(new Object[]{evalContext, null});
         } finally {
             returnContext(evalContext);
         }
     }
+
     /**
-     * Executes the action of a compiled rule.
+     * Executes the action block of a compiled rule.
      *
      * @param compiledRule the compiled rule
-     * @param context the execution context
-     * @throws Exception if action execution fails
+     * @param context      the execution context
+     * @throws Exception if execution fails
      */
     private void executeAction(CompiledRule compiledRule,
                                RuleExecutionContext context) throws Exception {
@@ -579,29 +489,28 @@ public class LWREngine implements Cloneable {
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
-            Future<?> future = executor.submit(() ->
-                    compiledRule.getActionEvaluator().evaluate(
-                            new Object[]{evalContext, null}));
-
-            future.get(compiledRule.getRule().getTimeout(), TimeUnit.MILLISECONDS);
+            compiledRule.getActionEvaluator().evaluate(new Object[]{evalContext, null});
 
             Rule rule = compiledRule.getRule();
-            Map<String, Object> outputs = new HashMap<>();
-            for (String produceVar : rule.getProduces().keySet()) {
-                outputs.put(produceVar, evalContext.get(produceVar));
+            if (!rule.getProduces().isEmpty()) {
+                Map<String, Object> outputs = new HashMap<>(rule.getProduces().size());
+                for (String produceVar : rule.getProduces().keySet()) {
+                    outputs.put(produceVar, evalContext.get(produceVar));
+                }
+                ruleOutputs.put(rule.getName(), outputs);
             }
-            ruleOutputs.put(rule.getName(), outputs);
         } finally {
             returnContext(evalContext);
         }
     }
+
     /**
-     * Executes the final block of a compiled rule, if present.
+     * Executes the final block of a compiled rule.
      *
      * @param compiledRule the compiled rule
-     * @param context the execution context
-     * @return the result of the final block, or null if none
-     * @throws Exception if final block execution fails
+     * @param context      the execution context
+     * @return the result of the final block
+     * @throws Exception if execution fails
      */
     private Object executeFinalBlock(CompiledRule compiledRule,
                                      RuleExecutionContext context) throws Exception {
@@ -610,45 +519,49 @@ public class LWREngine implements Cloneable {
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
-            Future<Object> future = executor.submit(() ->
-                    compiledRule.getFinalEvaluator().evaluate(
-                            new Object[]{evalContext, null}));
-
-            return future.get(compiledRule.getRule().getTimeout(), TimeUnit.MILLISECONDS);
+            return compiledRule.getFinalEvaluator().evaluate(new Object[]{evalContext, null});
         } finally {
             returnContext(evalContext);
         }
     }
+
     /**
-     * Populates the evaluation context with global variables and rule-specific variables.
+     * Populates the evaluation context with global variables, rule outputs, and used variables.
      *
-     * @param context the evaluation context
-     * @param rule the rule being executed
+     * @param context          the evaluation context
+     * @param rule             the rule being executed
      * @param executionContext the rule execution context
      */
     private void populateContext(Map<String, Object> context, Rule rule,
                                  RuleExecutionContext executionContext) {
         context.clear();
 
-        executionContext.executionGlobals.forEach(context::put);
+        if (!executionContext.executionGlobals.isEmpty()) {
+            context.putAll(executionContext.executionGlobals);
+        }
 
-        globalVariables.forEach(context::put);
+        context.putAll(globalVariables);
 
-        for (Map.Entry<String, Rule.UseVariable> entry : rule.getUses().entrySet()) {
-            String localName = entry.getKey();
-            Rule.UseVariable useVar = entry.getValue();
-            Object value = null;
+        Map<String, Rule.UseVariable> uses = rule.getUses();
+        if (!uses.isEmpty()) {
+            for (Map.Entry<String, Rule.UseVariable> entry : uses.entrySet()) {
+                String localName = entry.getKey();
+                Rule.UseVariable useVar = entry.getValue();
+                Object value = null;
 
-            if ("Global".equals(useVar.getSource())) {
-                value = globalVariables.get(useVar.getVariableName());
-            } else if ("RULE".equals(useVar.getSource())) {
-                Map<String, Object> ruleOutput = ruleOutputs.get(useVar.getSourceId());
-                if (ruleOutput != null) {
-                    value = ruleOutput.get(useVar.getVariableName());
+                if ("Global".equals(useVar.getSource())) {
+                    value = globalVariables.get(useVar.getVariableName());
+                } else if ("RULE".equals(useVar.getSource())) {
+                    Map<String, Object> ruleOutput = ruleOutputs.get(useVar.getSourceId());
+                    if (ruleOutput != null) {
+                        value = ruleOutput.get(useVar.getVariableName());
+                    }
+                }
+
+                if (value != null) {
+                    context.put(localName, value);
                 }
             }
-
-            context.put(localName, value);
         }
 
         Map<String, Object> existingOutputs = ruleOutputs.get(rule.getName());
@@ -656,36 +569,41 @@ public class LWREngine implements Cloneable {
             context.putAll(existingOutputs);
         }
     }
+
     /**
-     * Retrieves a context map from the pool or creates a new one.
+     * Retrieves a context map from the thread-local pool or creates a new one.
      *
      * @return a context map
      */
+
     public Map<String, Object> getContext() {
-        Map<String, Object> context = contextPool.poll();
-        return (context != null) ? context : new HashMap<>();
+        Queue<Map<String, Object>> pool = THREAD_LOCAL_CONTEXT_POOL.get();
+        Map<String, Object> context = pool.poll();
+        return (context != null) ? context : new HashMap<>(500);
     }
+
     /**
-     * Returns a context map to the pool after clearing it, if the pool is not full.
+     * Returns a context map to the thread-local pool after clearing it.
      *
      * @param context the context map to return
      */
     private void returnContext(Map<String, Object> context) {
-        int MAX_POOL_SIZE = 1000;
-        if (contextPool.size() < MAX_POOL_SIZE) {
+        Queue<Map<String, Object>> pool = THREAD_LOCAL_CONTEXT_POOL.get();
+        if (pool.size() < 500) { // Limit pool size per thread
             context.clear();
-            contextPool.offer(context);
+            pool.offer(context);
         }
     }
+
     /**
-     * Clears the rule output and context pool caches.
+     * Clears the rule output cache.
      */
     public void clearCache() {
         ruleOutputs.clear();
-        contextPool.clear();
     }
+
     /**
-     * Updates an existing rule with a new version and rebuilds the dependency graph.
+     * Updates an existing rule with a new version and recompiles group structures.
      *
      * @param newRule the new rule version
      * @throws Exception if rule compilation fails
@@ -694,24 +612,21 @@ public class LWREngine implements Cloneable {
         String versionKey = newRule.getName() + "_" + newRule.getVersion();
         if (ruleVersions.containsKey(versionKey)) return;
 
-        List<String> groupHelpers = this.groupHelpers.getOrDefault(newRule.getGroup(), Collections.emptyList());
-        CompiledRule compiled = compiler.compileRule(newRule, groupHelpers);
+        String[] helpers = groupHelpers.getOrDefault(newRule.getGroup(), new String[0]);
+        CompiledRule compiled = compiler.compileRule(newRule, Arrays.asList(helpers));
+
         compiledRules.removeIf(cr -> cr.getRule().getName().equals(newRule.getName()));
         compiledRules.add(compiled);
 
-        // Update group mapping
-        compiledRulesByGroup.computeIfAbsent(newRule.getGroup(), k -> new CopyOnWriteArrayList<>())
-                .removeIf(cr -> cr.getRule().getName().equals(newRule.getName()));
-        compiledRulesByGroup.get(newRule.getGroup()).add(compiled);
-
-        buildDependencyGraphs();
+        rebuildGroupStructures();
         ruleVersions.put(versionKey, newRule);
     }
+
     /**
-     * Rolls back a rule to its latest version.
+     * Rolls back to the latest version of a rule.
      *
-     * @param ruleName the name of the rule to roll back
-     * @return true if rollback is successful, false otherwise
+     * @param ruleName the name of the rule to rollback
+     * @return true if rollback was successful, false otherwise
      */
     public boolean rollbackRule(String ruleName) {
         return ruleVersions.entrySet().stream()
@@ -727,8 +642,9 @@ public class LWREngine implements Cloneable {
                 })
                 .orElse(false);
     }
+
     /**
-     * Retrieves a snapshot of the current metrics for rule execution.
+     * Retrieves a snapshot of the current metrics.
      *
      * @return a map of metric names to their values
      */
@@ -755,10 +671,11 @@ public class LWREngine implements Cloneable {
                         }
                 ));
     }
+
     /**
-     * Creates a deep copy of the rule engine.
+     * Creates a deep copy of the engine.
      *
-     * @return a cloned instance of the rule engine
+     * @return a cloned instance of the engine
      */
     @Override
     public LWREngine clone() {
@@ -767,49 +684,65 @@ public class LWREngine implements Cloneable {
         cloned.compiledRules.addAll(this.compiledRules);
         cloned.globalVariables.putAll(this.globalVariables);
         cloned.ruleVersions.putAll(this.ruleVersions);
-        cloned.clearCache();
+        cloned.rebuildGroupStructures();
         return cloned;
     }
+
     /**
-     * Builder class for constructing an {@code LWREngine} instance with custom configuration.
+     * Builder class for constructing an {@code LWREngine} instance.
      */
     public static class Builder {
-        private LWREngine e = new LWREngine();
+        private final LWREngine e = new LWREngine();
+
         /**
          * Enables or disables debug tracing.
          *
-         * @param flag true to enable tracing, false to disable
+         * @param flag true to enable, false otherwise
          * @return this builder
          */
         public Builder debug(boolean flag) {
             e.traceEnabled = flag;
             return this;
         }
+
+        /**
+         * Enables or disables metrics collection.
+         *
+         * @param flag true to enable, false otherwise
+         * @return this builder
+         */
+        public Builder metric(boolean flag) {
+            e.metric = flag;
+            return this;
+        }
+
         /**
          * Sets the maximum number of execution steps.
          *
-         * @param steps the maximum number of steps
+         * @param steps the maximum steps
          * @return this builder
          */
         public Builder maxSteps(int steps) {
             e.maxExecutionSteps = steps;
             return this;
         }
+
         /**
-         * Adds rules from a DSL string.
+         * Adds rules from a DSL content string.
          *
          * @param dsl the DSL content
          * @return this builder
-         * @throws Exception if parsing or compilation fails
+         * @throws Exception if rule parsing or compilation fails
          */
         public Builder rules(String dsl) throws Exception {
             e.addRules(dsl);
             return this;
         }
+
         /**
          * Sets a global variable.
          *
-         * @param name the variable name
+         * @param name  the variable name
          * @param value the variable value
          * @return this builder
          */
@@ -817,10 +750,11 @@ public class LWREngine implements Cloneable {
             e.setGlobalVariable(name, value);
             return this;
         }
+
         /**
-         * Builds the rule engine instance.
+         * Builds the {@code LWREngine} instance.
          *
-         * @return the configured rule engine
+         * @return the constructed engine
          */
         public LWREngine build() {
             return e;
@@ -828,9 +762,14 @@ public class LWREngine implements Cloneable {
     }
 
     /**
-     * Exception thrown when the engine is overloaded and the circuit breaker is tripped.
+     * Exception thrown when the engine is overloaded.
      */
     public static class EngineOverloadException extends RuleExecutionException {
+        /**
+         * Constructs a new {@code EngineOverloadException} with the specified message.
+         *
+         * @param message the error message
+         */
         public EngineOverloadException(String message) {
             super(message);
         }

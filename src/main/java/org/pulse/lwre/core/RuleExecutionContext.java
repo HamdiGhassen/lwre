@@ -1,4 +1,3 @@
-// RuleExecutionContext.java
 package org.pulse.lwre.core;
 
 import java.util.Map;
@@ -31,6 +30,7 @@ public class RuleExecutionContext {
     public final Map<String, Object> executionGlobals = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, RuleExecutionState> ruleStates = new ConcurrentHashMap<>();
     private final String executionId;
+
     /**
      * Constructs a new {@code RuleExecutionContext} with the specified execution ID.
      *
@@ -39,6 +39,7 @@ public class RuleExecutionContext {
     public RuleExecutionContext(String executionId) {
         this.executionId = executionId;
     }
+
     /**
      * Retrieves or creates the execution state for a specific rule.
      *
@@ -46,8 +47,12 @@ public class RuleExecutionContext {
      * @return the rule's execution state
      */
     public RuleExecutionState getState(String ruleName) {
-        return ruleStates.computeIfAbsent(ruleName, k -> new RuleExecutionState());
+        if (ruleStates.get(ruleName) == null) {
+            ruleStates.putIfAbsent(ruleName, new RuleExecutionState());
+        }
+        return ruleStates.get(ruleName);
     }
+
     /**
      * Resets the execution state for a specific rule.
      *
@@ -56,15 +61,17 @@ public class RuleExecutionContext {
     public void resetState(String ruleName) {
         ruleStates.remove(ruleName);
     }
+
     /**
      * Sets a global variable in the execution context.
      *
-     * @param key the variable key
+     * @param key   the variable key
      * @param value the variable value
      */
     public void setGlobal(String key, Object value) {
         executionGlobals.put(key, value);
     }
+
     /**
      * Retrieves a global variable from the execution context.
      *
@@ -74,6 +81,7 @@ public class RuleExecutionContext {
     public Object getGlobal(String key) {
         return executionGlobals.get(key);
     }
+
     /**
      * Retrieves the unique execution ID for this context.
      *
@@ -82,6 +90,7 @@ public class RuleExecutionContext {
     public String getExecutionId() {
         return executionId;
     }
+
     /**
      * Inner class representing the execution state of a rule, tracking execution count, retries, and errors.
      */
@@ -90,6 +99,7 @@ public class RuleExecutionContext {
         private int retryCount = 0;
         private long lastExecutionTime = 0;
         private Throwable lastError;
+
         /**
          * Retrieves the number of times the rule has been executed.
          *
@@ -98,12 +108,14 @@ public class RuleExecutionContext {
         public int getExecutionCount() {
             return executionCount;
         }
+
         /**
          * Increments the execution count for the rule.
          */
         public void incrementExecutionCount() {
             executionCount++;
         }
+
         /**
          * Retrieves the number of retry attempts for the rule.
          *
@@ -119,12 +131,14 @@ public class RuleExecutionContext {
         public void incrementRetryCount() {
             retryCount++;
         }
+
         /**
          * Resets the retry count for the rule to zero.
          */
         public void resetRetryCount() {
             retryCount = 0;
         }
+
         /**
          * Retrieves the timestamp of the last execution attempt.
          *
@@ -133,6 +147,7 @@ public class RuleExecutionContext {
         public long getLastExecutionTime() {
             return lastExecutionTime;
         }
+
         /**
          * Sets the timestamp of the last execution attempt.
          *
@@ -141,6 +156,7 @@ public class RuleExecutionContext {
         public void setLastExecutionTime(long time) {
             lastExecutionTime = time;
         }
+
         /**
          * Retrieves the last error encountered during rule execution.
          *
@@ -149,6 +165,7 @@ public class RuleExecutionContext {
         public Throwable getLastError() {
             return lastError;
         }
+
         /**
          * Sets the last error encountered during rule execution.
          *
@@ -157,6 +174,7 @@ public class RuleExecutionContext {
         public void setLastError(Throwable error) {
             lastError = error;
         }
+
         /**
          * Determines if the rule should be retried based on its retry count and delay.
          *

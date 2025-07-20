@@ -21,22 +21,23 @@ package org.pulse.lwre.core;
  *
  * @author Hamdi Ghassen
  */
-public  class RuleExecutionException extends Exception {
+public class RuleExecutionException extends Exception {
     /**
      * Constructs a new {@code RuleExecutionException} with the specified message.
      *
      * @param message the error message
      */
-        public RuleExecutionException(String message) {
-            super(message);
-        }
+    public RuleExecutionException(String message) {
+        super(message);
+    }
+
     /**
      * Constructs a new {@code RuleExecutionException} with the specified message and cause.
      *
      * @param message the error message
-     * @param cause the underlying cause of the exception
+     * @param cause   the underlying cause of the exception
      */
-        public RuleExecutionException(String message, Throwable cause) {
-            super(message, cause);
-        }
+    public RuleExecutionException(String message, Throwable cause) {
+        super(message, cause);
     }
+}

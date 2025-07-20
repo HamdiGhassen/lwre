@@ -23,11 +23,12 @@ package org.pulse.lwre.core;
 public class RuleOutcome {
     final Object finalResult;
     final boolean success;
+
     /**
      * Constructs a new {@code RuleOutcome} with the specified result and success status.
      *
      * @param finalResult the result of the rule execution, or null if none
-     * @param success true if the rule executed successfully, false otherwise
+     * @param success     true if the rule executed successfully, false otherwise
      */
     RuleOutcome(Object finalResult, boolean success) {
         this.finalResult = finalResult;
