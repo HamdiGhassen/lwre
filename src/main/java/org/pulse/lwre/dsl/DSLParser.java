@@ -1,6 +1,8 @@
 package org.pulse.lwre.dsl;
 
+import org.pulse.lwre.core.DirectedGraph;
 import org.pulse.lwre.core.Rule;
+import org.pulse.lwre.core.RuleGraphProcessor;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -111,7 +113,8 @@ public class DSLParser {
 
     private static void validateParseResults(ParseResult parseResult) throws DSLException {
         List<Rule> rules = parseResult.getRules();
-
+        //TO Check Cycles
+        Map<String, DirectedGraph<Rule>> stringDirectedGraphMap = RuleGraphProcessor.processRules(rules);
         for (Rule rule : rules) {
             if (rules.stream().filter(r-> r.getName().equals(rule.getName()) && r.getGroup().equals(rule.getGroup())).count() != 1) {
                 throw new DSLException("Multiple rules with same name "+ rule.getName()+" on the same group "+ rule.getGroup());
@@ -139,7 +142,6 @@ public class DSLParser {
                       }
                   }
                 }
-
              }
         }
     }
