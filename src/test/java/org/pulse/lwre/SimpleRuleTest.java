@@ -18,7 +18,7 @@ public class SimpleRuleTest {
     public void setup() throws Exception {
         dsl = "#RULE SIMPLE_RULE\n" +
                 "#PRODUCE\n" +
-                " result as Integer\n" +
+                " result : Integer\n" +
                 "#ACTION\n" +
                 " int a = 1;\n" +
                 " int b = 41;\n" +

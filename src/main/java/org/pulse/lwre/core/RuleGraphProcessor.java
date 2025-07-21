@@ -1,5 +1,7 @@
 package org.pulse.lwre.core;
 
+import org.pulse.lwre.dsl.DSLException;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -102,16 +104,17 @@ public class RuleGraphProcessor {
             try {
                 entry.getValue().topologicalSort();
             } catch (IllegalStateException e) {
-                System.out.println("Warning: Cycle detected in rule dependencies for group: " + entry.getKey());
+                new DSLException("Warning: Cycle detected in rule dependencies for group: " + entry.getKey());
             }
         }
 
         return groupGraphs;
     }
+
     /**
      * Identifies the root nodes of a rule group, defined as rules with the lowest priority and no rule dependencies.
      *
-     * @param graph the directed graph of rules
+     * @param graph      the directed graph of rules
      * @param groupRules the list of rules in the group
      * @return a list of root nodes
      */
@@ -140,11 +143,12 @@ public class RuleGraphProcessor {
 
         return rootNodes;
     }
+
     /**
      * Prints the structure of the rule graph for a specific group, including root nodes and dependencies.
      *
      * @param groupName the name of the rule group
-     * @param graph the directed graph of rules
+     * @param graph     the directed graph of rules
      */
     public static void printGraphStructure(String groupName, DirectedGraph<Rule> graph) {
         System.out.println("\n=== Group: " + groupName + " ===");

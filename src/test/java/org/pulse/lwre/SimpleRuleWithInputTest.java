@@ -16,13 +16,16 @@ public class SimpleRuleWithInputTest {
     private String  dsl;
     @Before
     public void setup() throws Exception {
-        dsl = "#RULE SIMPLE_RULE\n" +
+        dsl =   "#GLOBAL\n" +
+                "input1 : Integer\n" +
+                "input2 : Integer\n" +
+                "#RULE SIMPLE_RULE\n" +
                 "\n" +
                 "#USE\n" +
                 " input1 : Integer as a FROM Global\n" +
                 " input2 : Integer as b FROM Global \n" +
                 "#PRODUCE\n" +
-                " result as Integer\n" +
+                " result : Integer\n" +
                 "#ACTION\n" +
                 " result = a+b;\n" +
                 "#FINAL\n" +

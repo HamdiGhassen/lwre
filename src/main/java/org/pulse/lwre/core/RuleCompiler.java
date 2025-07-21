@@ -1,7 +1,7 @@
 package org.pulse.lwre.core;
 
-import org.codehaus.janino.*;
 import org.codehaus.commons.compiler.CompileException;
+import org.codehaus.janino.ScriptEvaluator;
 import org.pulse.lwre.utils.CodeFormatter;
 
 import java.io.StringReader;
@@ -47,10 +47,11 @@ public class RuleCompiler {
             "\\b(exec|exit|gc|loadLibrary|setSecurityManager|runFinalizersOnExit)\\b"
     );
     private final Map<String, CompiledRule> compiledRulesCache = new ConcurrentHashMap<>();
+
     /**
      * Compiles a rule into a {@code CompiledRule} object, caching the result for efficiency.
      *
-     * @param rule the rule to compile
+     * @param rule         the rule to compile
      * @param helperBlocks the list of helper function blocks
      * @return the compiled rule
      * @throws RuleCompilationException if compilation fails
@@ -69,6 +70,7 @@ public class RuleCompiler {
             }
         });
     }
+
     /**
      * Validates the safety of helper blocks by checking for forbidden classes and methods.
      *
@@ -80,6 +82,7 @@ public class RuleCompiler {
             validateScriptBlock(helper);
         }
     }
+
     /**
      * Validates the safety of a rule's script blocks (condition, action, final, and retry).
      *
@@ -91,6 +94,7 @@ public class RuleCompiler {
         validateScriptBlock(rule.getFinalBlock());
         validateScriptBlock(rule.getRetryCondition());
     }
+
     /**
      * Validates a single script block for forbidden classes and dangerous method calls.
      *
@@ -109,10 +113,11 @@ public class RuleCompiler {
             throw new SecurityException("Dangerous method call detected");
         }
     }
+
     /**
      * Generates a unique cache key for a rule based on its properties and helper blocks.
      *
-     * @param rule the rule
+     * @param rule         the rule
      * @param helperBlocks the list of helper function blocks
      * @return the cache key
      */
@@ -121,11 +126,12 @@ public class RuleCompiler {
                 Objects.hash(rule.getConditionBlock(), rule.getActionBlock(), rule.getFinalBlock(),
                         rule.getImports(), rule.getProduces(), rule.getUses(), helperBlocks);
     }
+
     /**
      * Combines helper blocks that are referenced in the rule's script blocks.
      *
      * @param helperBlocks the list of helper function blocks
-     * @param rule the rule
+     * @param rule         the rule
      * @return the combined helper code
      */
     private String combineHelperBlocks(List<String> helperBlocks, Rule rule) {
@@ -155,10 +161,11 @@ public class RuleCompiler {
         }
         return combined.toString();
     }
+
     /**
      * Performs the actual compilation of a rule into a {@code CompiledRule} object.
      *
-     * @param rule the rule to compile
+     * @param rule         the rule to compile
      * @param helperBlocks the list of helper function blocks
      * @return the compiled rule
      * @throws RuleCompilationException if compilation fails
@@ -209,14 +216,15 @@ public class RuleCompiler {
         return new CompiledRule(rule, conditionEvaluator, actionEvaluator, finalEvaluator, retryEvaluator,
                 rule.getUses().keySet().toArray(new String[0]));
     }
+
     /**
      * Compiles a script evaluator for a specific block of the rule.
      *
-     * @param rule the rule
+     * @param rule         the rule
      * @param helperBlocks the list of helper function blocks
-     * @param block the script block to compile
-     * @param returnType the return type of the evaluator
-     * @param blockType the type of block being compiled (for error messages)
+     * @param block        the script block to compile
+     * @param returnType   the return type of the evaluator
+     * @param blockType    the type of block being compiled (for error messages)
      * @return the compiled script evaluator
      * @throws RuleCompilationException if compilation fails
      */
@@ -226,18 +234,21 @@ public class RuleCompiler {
         code.append(block).append("\n").append("\n");
 
         ScriptEvaluator evaluator = new ScriptEvaluator();
+        evaluator.setSourceVersion(17);
+        evaluator.setTargetVersion(17);
+        evaluator.setParentClassLoader(Thread.currentThread().getContextClassLoader());
+        evaluator.setDebuggingInformation(false, false, false);
         evaluator.setParameters(new String[]{"context", "error"}, new Class[]{Map.class, Throwable.class});
         evaluator.setReturnType(returnType);
         try {
             evaluator.cook(new StringReader(code.toString()));
         } catch (CompileException e) {
-            // Enhance Janino errors with exact line numbers
-            int lineNumber = e.getLocation() != null ? e.getLocation().getLineNumber()  : -1;
+            int lineNumber = e.getLocation() != null ? e.getLocation().getLineNumber() : -1;
             int columnNumber = e.getLocation() != null ? e.getLocation().getColumnNumber() : -1;
             String s = CodeFormatter.formatJavaCode(code.toString());
             String message = "Compilation error in " + blockType + " block";
 
-            message+=s;
+            message += s;
             message += ": " + e.getMessage();
 
             throw new RuleCompilationException(message, e);
@@ -246,6 +257,7 @@ public class RuleCompiler {
         }
         return evaluator;
     }
+
     /**
      * Builds the action code by appending context updates for produced variables.
      *
@@ -260,12 +272,13 @@ public class RuleCompiler {
         }
         return code.toString();
     }
+
     /**
      * Builds the code header for a script evaluator, including imports, helpers, and variable declarations.
      *
-     * @param rule the rule
+     * @param rule         the rule
      * @param helperBlocks the list of helper function blocks
-     * @param block the script block
+     * @param block        the script block
      * @return the code header
      */
     private StringBuilder buildCodeHeader(Rule rule, List<String> helperBlocks, String block) {
@@ -292,20 +305,22 @@ public class RuleCompiler {
         }
         return code;
     }
+
     /**
      * Resolves the type of a variable from the rule's produces map.
      *
-     * @param rule the rule
+     * @param rule    the rule
      * @param varName the variable name
      * @return the variable type
      */
     private String resolveType(Rule rule, String varName) {
         return rule.getProduces().getOrDefault(varName, "Object");
     }
+
     /**
      * Identifies variables referenced in a script block that match the provided candidates.
      *
-     * @param codeBlock the script block
+     * @param codeBlock  the script block
      * @param candidates the candidate variable names
      * @return the set of referenced variables
      */
@@ -322,6 +337,7 @@ public class RuleCompiler {
         }
         return referenced;
     }
+
     /**
      * Exception thrown when rule compilation fails.
      */
@@ -330,7 +346,7 @@ public class RuleCompiler {
          * Constructs a new {@code RuleCompilationException} with the specified message and cause.
          *
          * @param message the error message
-         * @param cause the underlying cause
+         * @param cause   the underlying cause
          */
         public RuleCompilationException(String message, Throwable cause) {
             super(message, cause);
