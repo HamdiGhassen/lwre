@@ -1,5 +1,7 @@
 package org.pulse.lwre.core;
 
+import org.pulse.lwre.dsl.DSLException;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -102,7 +104,7 @@ public class RuleGraphProcessor {
             try {
                 entry.getValue().topologicalSort();
             } catch (IllegalStateException e) {
-                System.out.println("Warning: Cycle detected in rule dependencies for group: " + entry.getKey());
+                new DSLException("Warning: Cycle detected in rule dependencies for group: " + entry.getKey());
             }
         }
 

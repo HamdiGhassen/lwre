@@ -12,7 +12,7 @@ public class LWREngineTest {
     public void testExecuteSimpleRule() throws Exception {
         String dsl = "#RULE SimpleRule\n" +
                      "#PRODUCE\n" +
-                     " result as Integer\n" +
+                     " result : Integer\n" +
                      "#ACTION\n" +
                      " result = 42;\n" +
                      "#FINAL\n" +
@@ -26,14 +26,14 @@ public class LWREngineTest {
     public void testExecuteRulesWithDependencies() throws Exception {
         String dsl = "#RULE Rule1\n" +
                      "#PRODUCE\n" +
-                     " result1 as Integer\n" +
+                     " result1 : Integer\n" +
                      "#ACTION\n" +
                      " result1 = 21;\n" +
                      "#RULE Rule2\n" +
                      "#USE\n" +
                      " result1 : Integer as input FROM RULE Rule1\n" +
                      "#PRODUCE\n" +
-                     " result2 as Integer\n" +
+                     " result2 : Integer\n" +
                      "#ACTION\n" +
                      " result2 = input * 2;\n" +
                      "#FINAL\n" +
@@ -48,10 +48,11 @@ public class LWREngineTest {
     @Test
     public void testExecuteRuleWithNextOnSuccess() throws Exception {
         String dsl = "#RULE Rule1\n" +
-                     "#NEXT_ON_SUCCESS Rule2\n#PRODUCE \nresult as Integer\n" +
+                     "#NEXT_ON_SUCCESS Rule2\n"+
+                     "#PRODUCE \nresult : Integer\n" +
                      "#ACTION\n" +
                      " result = 42;\n" +
-                     "#RULE Rule2\n\n#PRODUCE \nresult as Integer\n" +
+                     "#RULE Rule2\n\n#PRODUCE \nresult : Integer\n" +
                      "#ACTION\n" +
                      " result = 100;\n" +
                      "#FINAL\n" +

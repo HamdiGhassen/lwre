@@ -18,7 +18,7 @@ public class DSLParserTest {
                      "#GROUP TestGroup\n" +
                      "#PRIORITY 5\n" +
                      "#PRODUCE\n" +
-                     " result as Integer\n" +
+                     " result : Integer\n" +
                      "#ACTION\n" +
                      " result = 42;\n" +
                      "#FINAL\n" +
@@ -41,7 +41,7 @@ public class DSLParserTest {
     public void testParseRuleWithDependency() throws DSLException {
         String dsl = "#RULE Rule1\n" +
                      "#PRODUCE\n" +
-                     " result1 as Integer\n" +
+                     " result1 : Integer\n" +
                      "#ACTION\n" +
                      " result1 = 21;\n" +
                      "#RULE Rule2\n" +
@@ -151,7 +151,12 @@ public class DSLParserTest {
 
     @Test
     public void testParseMultipleGroups() throws DSLException {
-        String dsl = "#RULE Rule1\n" +
+        String dsl ="#GLOBAL\n" +
+                     "\n"+
+                     "result :Integer\n" +
+                     "result1 : Integer\n" +
+                     "\n"+
+                     "#RULE Rule1\n" +
                      "#GROUP GroupA\n" +
                      "#ACTION\n" +
                      " System.out.println(\"A\");\n" +

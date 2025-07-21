@@ -16,12 +16,15 @@ public class RulesWithDependanciesTest {
 
      @Before
     public void setup() throws Exception {
-         dsl = "#RULE RULE1\n" +
+         dsl =   "#GLOBAL\n" +
+                 " input1 : Integer\n" +
+                 " input2 : Integer\n" +
+                 "#RULE RULE1\n" +
                  "#USE\n" +
                  " input1 : Integer as a FROM Global\n" +
                  " input2 : Integer as b FROM Global \n" +
                  "#PRODUCE\n" +
-                 " result as Integer\n" +
+                 " result : Integer\n" +
                  "#ACTION\n" +
                  " result = a+b;\n" +
                  "#RULE RULE2\n" +
