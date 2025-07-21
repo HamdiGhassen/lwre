@@ -3,7 +3,9 @@ package org.pulse.lwre.dsl;
 import org.pulse.lwre.core.Rule;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 /*
@@ -32,7 +34,7 @@ import java.util.regex.Pattern;
 public class DSLParser {
 
     private static final Pattern USE_PATTERN =
-            Pattern.compile("(\\w+)\\s+:\\s+([\\w.<>,\\s]+)\\s+as\\s+(\\w+)\\s+FROM\\s+(RULE\\s+\\w+|Global)");
+            Pattern.compile("(\\w+)\\s*:\\s*([\\w.<>,\\s]+)\\s+as\\s+(\\w+)\\s+FROM\\s+(RULE\\s+\\w+|Global)");
     private static final Pattern RETRY_PATTERN =
             Pattern.compile("#RETRY\\s+(\\d+)(?:\\s+DELAY\\s+(\\d+))?(?:\\s+IF\\s+\\{(.+?)\\})?");
     private static final Pattern NEXT_RULE_PATTERN =
@@ -59,14 +61,20 @@ public class DSLParser {
         }
         List<Rule> rules = new ArrayList<>();
         List<String> helpers = new ArrayList<>();
-        String[] sections = dslContent.split("(?=#(RULE|HELPER))");
+        Map<String,String> globals = new HashMap<>();
+        String[] sections = dslContent.split("(?=#(RULE|HELPER|GLOBAL))");
         StringBuilder currentHelper = new StringBuilder();
+        StringBuilder currentGlobal = new StringBuilder();
         boolean inHelperBlock = false;
-
+        boolean inGlobalBlock = false;
         for (String section : sections) {
             section = section.trim();
             if (section.isEmpty() || section.startsWith("//")) continue;
-
+            if (section.startsWith("#GLOBAL")) {
+                inGlobalBlock = true;
+                String globalContent = section.substring(7).trim();
+                currentGlobal.append(globalContent).append("\n");
+            }
             if (section.startsWith("#HELPER")) {
                 inHelperBlock = true;
                 // Remove #HELPER directive and keep the content
@@ -79,10 +87,16 @@ public class DSLParser {
                     currentHelper = new StringBuilder();
                     inHelperBlock = false;
                 }
+                if (inGlobalBlock) {
+                    fillGlobals(currentGlobal.toString(),globals);
+                    currentGlobal = new StringBuilder();
+                    inGlobalBlock = false;
+                }
                 Rule rule = parseRule(section);
                 rules.add(rule);
             } else if (inHelperBlock) {
                 currentHelper.append(section).append("\n");
+            } else if (inGlobalBlock) {
             }
         }
 
@@ -90,8 +104,63 @@ public class DSLParser {
 
             helpers.add(currentHelper.toString());
         }
+        ParseResult parseResult = new ParseResult(rules, globals, helpers);
+        validateParseResults(parseResult);
+        return parseResult;
+    }
 
-        return new ParseResult(rules, helpers);
+    private static void validateParseResults(ParseResult parseResult) throws DSLException {
+        List<Rule> rules = parseResult.getRules();
+
+        for (Rule rule : rules) {
+            if (rules.stream().filter(r-> r.getName().equals(rule.getName()) && r.getGroup().equals(rule.getGroup())).count() != 1) {
+                throw new DSLException("Multiple rules with same name "+ rule.getName()+" on the same group "+ rule.getGroup());
+            }
+            for (Rule.UseVariable variable : rule.getUses().values()) {
+                if ("Global".equals(variable.getSource())) {
+                   if (! parseResult.global.containsKey(variable.getVariableName())) {
+                       throw new DSLException("RULE "+ rule.getName()+" uses an undefined Global variable : "+variable.getVariableName());
+
+                   }
+                }
+                if ("RULE".equals(variable.getSource())) {
+                  for (Rule rule1 : rules) {
+                      long count = rules.stream().filter(r ->
+                          rule.getGroup().equals(r.getGroup()) && r.getName().equals(variable.getSourceId())
+                      ).count();
+                      if (count == 0) {
+                          throw new DSLException("RULE "+ rule.getName()+" uses an undefined variable : \""+variable.getVariableName()+"\" , rule \""+variable.getSourceId()+"\" does not exist in the group \""+rule.getGroup()+"\"");
+
+                      }
+                      if (rule1.getName().equals(variable.getSourceId()) && rule1.getGroup().equals(rule.getGroup())) {
+                          if (!rule1.getProduces().containsKey(variable.getVariableName())) {
+                             throw new DSLException("rule \""+ rule.getName()+"\" uses an undefined variable : \""+variable.getVariableName()+"\" from \"" + rule1.getName()+"\"");
+                         }
+                      }
+                  }
+                }
+
+             }
+        }
+    }
+    /**
+     * Parse global variables
+     * @param globalContent the content of the section #GLOBAL
+     * @param globals parsed global variables , including its name and Type
+     * @throws DSLException throws an exception when the #GLOBAL block is declared in the dsl but it's empty or the format expected for the global variable isn't <name> : <type>
+     */
+    private static void fillGlobals(String globalContent,Map<String,String> globals) throws DSLException {
+        for (String global : globalContent.split("\n")) {
+            String trimmed = global.trim();
+            if (trimmed.isEmpty()) {
+                throw new DSLException("GLOBAL block cannot be empty");
+            }
+            String[] parts = trimmed.split("\\s*:\\s*");
+            if (parts.length != 2) {
+                throw new DSLException("Invalid GLOBAL format. Expected: '<name> : <Type>'");
+            }
+           globals.put(parts[0].trim(), parts[1].trim());
+        }
     }
     /**
      * Parses a single rule from a DSL section.
@@ -240,7 +309,7 @@ public class DSLParser {
                     if (trimmed.isEmpty()) {
                         throw new DSLException("PRODUCE statement cannot be empty");
                     }
-                    String[] parts = trimmed.split("\\s+as\\s+");
+                    String[] parts = trimmed.split("\\s*:\\s*");
                     if (parts.length != 2) {
                         throw new DSLException("Invalid PRODUCE format. Expected: '<type> as <alias>'");
                     }
@@ -413,17 +482,21 @@ public class DSLParser {
      * Inner class representing the result of parsing DSL content, containing rules and helper blocks.
      */
     public static class ParseResult {
+        private final Map<String,String> global;
         private final List<Rule> rules;
         private final List<String> helpers;
         /**
          * Constructs a new {@code ParseResult} with the specified rules and helpers.
          *
          * @param rules the list of parsed rules
+         * @param globals the list of global parameters required by the DSL
          * @param helpers the list of helper blocks
+         *
          */
-        public ParseResult(List<Rule> rules, List<String> helpers) {
+        public ParseResult(List<Rule> rules,Map<String,String> globals, List<String> helpers) {
             this.rules = rules;
             this.helpers = helpers;
+            this.global = globals;
         }
         /**
          * Retrieves the list of parsed rules.
@@ -440,6 +513,14 @@ public class DSLParser {
          */
         public List<String> getHelpers() {
             return helpers;
+        }
+        /**
+         * Retrieves the global variables from Global blocks.
+         *
+         * @return the map of global variables
+         */
+        public Map<String,String> getGlobals() {
+            return global;
         }
     }
 }
