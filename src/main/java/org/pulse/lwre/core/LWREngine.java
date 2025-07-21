@@ -122,6 +122,10 @@ public class LWREngine implements Cloneable {
      * @throws Exception if rule compilation fails
      */
     public void addRule(Rule rule) throws Exception {
+        long count = compiledRules.stream().filter(c -> c.getRule().getName().equals(rule.getName()) && c.getRule().getGroup().equals(rule.getGroup())).count();
+        if (count != 0) {
+            throw new RuleExecutionException("The rule "+rule.getName()+" for group "+rule.getGroup()+" already exist");
+        }
         CompiledRule compiledRule = compiler.compileRule(rule,
                 Arrays.asList(groupHelpers.getOrDefault(rule.getGroup(), new String[0])));
         compiledRules.add(compiledRule);
@@ -143,6 +147,10 @@ public class LWREngine implements Cloneable {
         // Convert helpers to arrays for better performance
         Map<String, String[]> groupHelperMap = new HashMap<>();
         for (Rule rule : parseResult.getRules()) {
+            long count = compiledRules.stream().filter(c -> c.getRule().getName().equals(rule.getName()) && c.getRule().getGroup().equals(rule.getGroup())).count();
+            if (count != 0) {
+                throw new RuleExecutionException("The rule "+rule.getName()+" for group "+rule.getGroup()+" already exist");
+            }
             List<String> helpers = parseResult.getHelpers();
             groupHelperMap.put(rule.getGroup(), helpers.toArray(new String[0]));
         }
