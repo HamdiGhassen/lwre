@@ -1,3 +1,6 @@
+#GLOBAL
+input1 : Integer
+input2 : Integer
 #RULE ComputeSum
 #USE
   input1 : Integer as a FROM Global
