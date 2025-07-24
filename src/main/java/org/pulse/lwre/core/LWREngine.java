@@ -537,6 +537,7 @@ public class LWREngine implements Cloneable {
                     System.out.println("Rule failed permanently: " + rule.getName());
                 }
             }
+            circuitBreaker.recordFailure();
         }
         return new RuleOutcome(finalResult, success);
     }
