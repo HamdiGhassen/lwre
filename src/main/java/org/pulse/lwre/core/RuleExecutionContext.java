@@ -99,6 +99,10 @@ public class RuleExecutionContext {
         private int retryCount = 0;
         private long lastExecutionTime = 0;
         private Throwable lastError;
+        private long nextExecutionTime = 0;
+
+        private boolean completed = false;
+        private boolean failed = false;
 
         /**
          * Retrieves the number of times the rule has been executed.
@@ -175,6 +179,39 @@ public class RuleExecutionContext {
             lastError = error;
         }
 
+        /**
+         * Gets the next execution time of the processed rule
+         * @return the next execution time accounting the delay of the next execution
+         */
+        public long getNextExecutionTime() { return nextExecutionTime; }
+
+        /**
+         * Sets the next execution time for the processed rule
+         * @param time the next time when the rule will be fired
+         */
+        public void setNextExecutionTime(long time) { nextExecutionTime = time; }
+
+        /**
+         * Checks the rule execution completion
+         * @return true if the rule execution completed , false otherwise
+         */
+        public boolean isCompleted() { return completed; }
+
+        /**
+         * Sets the rule execution completion
+         * @param completed flag to set rule execution completion
+         */
+        public void setCompleted(boolean completed) { this.completed = completed; }
+        /**
+         * Checks the rule execution failure
+         * @return true if the rule execution failed , false otherwise
+         */
+        public boolean isFailed() { return failed; }
+        /**
+         * Sets the rule execution failure
+         * @param failed flag to set rule execution completion
+         */
+        public void setFailed(boolean failed) { this.failed = failed; }
         /**
          * Determines if the rule should be retried based on its retry count and delay.
          *
