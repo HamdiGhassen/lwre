@@ -4,8 +4,10 @@ import org.pulse.lwre.dsl.DSLParser;
 import org.pulse.lwre.metric.Meter;
 import org.pulse.lwre.metric.MetricRegistry;
 
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /*
@@ -42,6 +44,10 @@ public class LWREngine implements Cloneable {
             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
             null, true);
 
+    // Scheduler for handling retry delays
+    private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
+            Runtime.getRuntime().availableProcessors());
+
     // Thread-safe storage for precomputed execution paths, rule indices, helpers, and variables
     private final Map<String, CompiledRule[]> precomputedExecutionPaths = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Integer>> ruleNameToIndexPerGroup = new ConcurrentHashMap<>();
@@ -53,11 +59,13 @@ public class LWREngine implements Cloneable {
     private final List<CompiledRule> compiledRules = new ArrayList<>();
     private final RuleCompiler compiler = new RuleCompiler();
     private final Map<String, Rule> ruleVersions = new ConcurrentHashMap<>();
-    private final CircuitBreaker circuitBreaker = new CircuitBreaker(1000000000, 30_000);
+    private final CircuitBreaker circuitBreaker = new CircuitBreaker(10, 30_000);
     private final MetricRegistry metrics = new MetricRegistry();
     private final Map<String, CompiledRule[]> compiledRulesByGroup = new ConcurrentHashMap<>();
     private final Map<String, Map<String, CompiledRule>> ruleByNamePerGroup = new ConcurrentHashMap<>();
-    private final Map<String, int[][]> dependencyMatrixPerGroup = new ConcurrentHashMap<>();
+    private final Map<String, DirectedGraph<Rule>> ruleGraphsByGroup = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, List<String>>> adjacencyPerGroup = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Integer>> initialInDegreesPerGroup = new ConcurrentHashMap<>();
     private final Map<String, CompiledRule[]> rootRulesPerGroup = new ConcurrentHashMap<>();
 
     // Configuration flags and variables
@@ -158,7 +166,7 @@ public class LWREngine implements Cloneable {
         }
         groupHelpers.putAll(groupHelperMap);
         for (Rule rule : parseResult.getRules()) {
-            String[] helpers =groupHelpers.get(rule.getGroup());
+            String[] helpers = groupHelpers.get(rule.getGroup());
             CompiledRule compiledRule = compiler.compileRule(rule, Arrays.asList(helpers));
             compiledRules.add(compiledRule);
             ruleVersions.put(rule.getName() + "_" + rule.getVersion(), rule.clone());
@@ -174,7 +182,9 @@ public class LWREngine implements Cloneable {
         ruleNameToIndexPerGroup.clear();
         compiledRulesByGroup.clear();
         ruleByNamePerGroup.clear();
-        dependencyMatrixPerGroup.clear();
+        ruleGraphsByGroup.clear();
+        adjacencyPerGroup.clear();
+        initialInDegreesPerGroup.clear();
         rootRulesPerGroup.clear();
         Map<String, List<CompiledRule>> tempGroupMap = new HashMap<>();
         for (CompiledRule cr : compiledRules) {
@@ -215,79 +225,63 @@ public class LWREngine implements Cloneable {
             return;
         }
         int n = rules.length;
-        int[][] depMatrix = new int[n][n];
-        Map<String, Integer> nameToIndex = ruleNameToIndexPerGroup.get(group);
+        Map<String, List<String>> adjacency = new HashMap<>();
+        Map<String, Integer> initialInDegrees = new HashMap<>();
         for (Rule rule : ruleGraph.getVertices()) {
-            Integer sourceIdx = nameToIndex.get(rule.getName());
-            if (sourceIdx != null) {
-                for (Rule neighbor : ruleGraph.getNeighbors(rule)) {
-                    Integer targetIdx = nameToIndex.get(neighbor.getName());
-                    if (targetIdx != null) {
-                        depMatrix[sourceIdx][targetIdx] = 1;
-                    }
-                }
-            }
+            String ruleName = rule.getName();
+            List<String> children = ruleGraph.getNeighbors(rule).stream()
+                    .map(Rule::getName)
+                    .collect(Collectors.toList());
+            adjacency.put(ruleName, children);
+            initialInDegrees.put(ruleName, ruleGraph.getInDegree(rule));
         }
-        dependencyMatrixPerGroup.put(group, depMatrix);
+        adjacencyPerGroup.put(group, adjacency);
+        initialInDegreesPerGroup.put(group, initialInDegrees);
         List<CompiledRule> rootRules = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            boolean hasIncoming = false;
-            for (int j = 0; j < n; j++) {
-                if (depMatrix[j][i] == 1) {
-                    hasIncoming = true;
-                    break;
-                }
-            }
-            if (!hasIncoming) {
-                rootRules.add(rules[i]);
+        for (Map.Entry<String, Integer> entry : initialInDegrees.entrySet()) {
+            if (entry.getValue() == 0) {
+                rootRules.add(nameMap.get(entry.getKey()));
             }
         }
         rootRules.sort(Comparator.comparingInt(cr -> cr.getRule().getPriority()));
         rootRulesPerGroup.put(group, rootRules.toArray(new CompiledRule[0]));
-        CompiledRule[] executionPath = computeTopologicalOrder(rules, depMatrix, nameToIndex);
+        CompiledRule[] executionPath = computeTopologicalOrder(group,rules, ruleGraph, nameMap);
         precomputedExecutionPaths.put(group, executionPath);
     }
 
     /**
      * Computes a topological order of rules using Kahn's algorithm for efficient execution sequencing.
-     *
+     * @param group the target group
      * @param rules       the compiled rules
-     * @param depMatrix   the dependency matrix
-     * @param nameToIndex mapping of rule names to indices
+     * @param ruleGraph   the directed graph of rules
+     * @param nameMap     mapping of rule names to compiled rules
      * @return the ordered array of compiled rules
      */
-    private CompiledRule[] computeTopologicalOrder(CompiledRule[] rules, int[][] depMatrix,
-                                                   Map<String, Integer> nameToIndex) {
-        int n = rules.length;
-        int[] inDegree = new int[n];
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
-                if (depMatrix[i][j] == 1) {
-                    inDegree[j]++;
-                }
-            }
-        }
-        Queue<Integer> queue = new ArrayDeque<>();
-        for (int i = 0; i < n; i++) {
-            if (inDegree[i] == 0) {
-                queue.add(i);
+    private CompiledRule[] computeTopologicalOrder(String group,CompiledRule[] rules, DirectedGraph<Rule> ruleGraph, Map<String, CompiledRule> nameMap) {
+        Map<String, Integer> inDegree = new HashMap<>(initialInDegreesPerGroup.get(group));
+        Queue<String> queue = new ArrayDeque<>();
+        for (String ruleName : inDegree.keySet()) {
+            if (inDegree.get(ruleName) == 0) {
+                queue.add(ruleName);
             }
         }
         List<CompiledRule> result = new ArrayList<>();
         while (!queue.isEmpty()) {
-            int current = queue.poll();
-            result.add(rules[current]);
-            for (int i = 0; i < n; i++) {
-                if (depMatrix[current][i] == 1) {
-                    inDegree[i]--;
-                    if (inDegree[i] == 0) {
-                        queue.add(i);
+            String current = queue.poll();
+            result.add(nameMap.get(current));
+            List<String> children = adjacencyPerGroup.get(group).get(current);
+            if (children != null) {
+                for (String child : children) {
+                    inDegree.compute(child, (k, v) -> v - 1);
+                    if (inDegree.get(child) == 0) {
+                        queue.add(child);
                     }
                 }
             }
         }
         return result.toArray(new CompiledRule[0]);
     }
+
     /**
      * Asynchronously executes all rules in a specified group, handling retries and timeouts.
      *
@@ -392,9 +386,9 @@ public class LWREngine implements Cloneable {
         }
         Set<String> groups = precomputedExecutionPaths.keySet();
         if (groups.size() == 1) {
-           String executionId = "EXEC" + System.nanoTime();
+            String executionId = "EXEC" + System.nanoTime();
             RuleExecutionContext context = new RuleExecutionContext(executionId);
-            localResult = executeRules(context,groups.iterator().next(),executionId );
+            localResult = executeRules(context, groups.iterator().next(), executionId);
             context.reset();
         } else {
             CompletableFuture<Object>[] futures = groups.stream()
@@ -418,105 +412,136 @@ public class LWREngine implements Cloneable {
 
     /**
      * Executes rules in a specific group with a given execution ID, managing retries and timeouts.
-     * This method processes rules in a loop, respecting dependencies and scheduling retries as needed.
+     * This method processes rules in parallel where possible, using a ScheduledExecutorService for retries.
      *
+     * @param context     the rule execution context
      * @param group       the rule group
      * @param executionId the unique execution ID
      * @return the final result of the execution
      * @throws RuleExecutionException if execution fails
      */
-    private Object executeRules(RuleExecutionContext context ,String group, String executionId) throws RuleExecutionException {
+    private Object executeRules(RuleExecutionContext context, String group, String executionId) throws RuleExecutionException {
         CompiledRule[] rules = precomputedExecutionPaths.get(group);
         if (rules == null || rules.length == 0) {
             throw new RuleExecutionException("No rules found for group: " + group);
         }
 
-        Map<String, Integer> pendingParents = new HashMap<>(); // Tracks dependencies for each rule
-        Map<String, Integer> ruleNameToIndex = ruleNameToIndexPerGroup.get(group);
-        int[][] depMatrix = dependencyMatrixPerGroup.get(group);
+        Map<String, Integer> pendingParents = new ConcurrentHashMap<>(initialInDegreesPerGroup.get(group));
+        Set<String> completedRules = ConcurrentHashMap.newKeySet();
+        CompletableFuture<Object> finalResultFuture = new CompletableFuture<>();
+        AtomicReference<Object> lastResult = new AtomicReference<>(null);
 
-        // Initialize dependency counts for each rule
+        // Execute rules asynchronously
+        executeReadyRules(context, rules, group, pendingParents, completedRules, finalResultFuture, lastResult);
+
+        try {
+            return finalResultFuture.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuleExecutionException("Execution interrupted for group: " + group, e);
+        } catch (ExecutionException e) {
+            throw new RuleExecutionException("Execution failed for group: " + group, e.getCause());
+        } finally {
+            clearCache();
+        }
+    }
+
+    /**
+     * Executes ready rules in parallel and schedules retries for failed rules.
+     *
+     * @param context           the rule execution context
+     * @param rules             the compiled rules
+     * @param group             the rule group
+     * @param pendingParents    map of pending dependencies
+     * @param completedRules    set of completed rule names
+     * @param finalResultFuture future to complete with the final result
+     * @param lastResult        atomic reference to store the last non-null result
+     */
+    private void executeReadyRules(RuleExecutionContext context, CompiledRule[] rules, String group,
+                                  Map<String, Integer> pendingParents, Set<String> completedRules, CompletableFuture<Object> finalResultFuture,
+                                  AtomicReference<Object> lastResult) {
+        List<CompiledRule> readyRules = new ArrayList<>();
+        long currentTime = System.currentTimeMillis();
+
+        // Identify ready rules
         for (CompiledRule rule : rules) {
             String ruleName = rule.getRule().getName();
-            int i = ruleNameToIndex.get(ruleName);
-            int count = 0;
-            for (int j = 0; j < rules.length; j++) {
-                if (depMatrix[j][i] == 1) count++;
+            RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
+            if (!completedRules.contains(ruleName) && !state.isFailed() &&
+                pendingParents.get(ruleName) == 0 && state.getNextExecutionTime() <= currentTime) {
+                readyRules.add(rule);
             }
-            pendingParents.put(ruleName, count);
         }
 
-        Set<String> completedRules = new HashSet<>();
-        Object finalResult = null;
-        long nextTime = Long.MAX_VALUE;
-        // Main execution loop: process rules until all are completed or failed
-        while (true) {
-            long currentTime = System.currentTimeMillis();
-            List<CompiledRule> readyRules = new ArrayList<>();
-
-            // Identify rules ready to execute (no pending dependencies and scheduled time reached)
+        if (readyRules.isEmpty()) {
+            // Schedule the next execution if there are pending rules
+            long nextTime = Long.MAX_VALUE;
             for (CompiledRule rule : rules) {
                 String ruleName = rule.getRule().getName();
                 RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
                 if (!completedRules.contains(ruleName) && !state.isFailed()) {
-                    if (pendingParents.get(ruleName) == 0 && state.getNextExecutionTime() <= currentTime) {
-                        readyRules.add(rule);
-                    }
+                    long nextExec = state.getNextExecutionTime();
+                    if (nextExec < nextTime) nextTime = nextExec;
                 }
             }
-
-            if (readyRules.isEmpty()) {
-                // Determine the next scheduled execution time
-
-                for (CompiledRule rule : rules) {
-                    String ruleName = rule.getRule().getName();
-                    RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
-                    if (!completedRules.contains(ruleName) && !state.isFailed()) {
-                        long nextExec = state.getNextExecutionTime();
-                        if (nextExec < nextTime) nextTime = nextExec;
-                    }
-                }
-                if (nextTime == Long.MAX_VALUE) {
-                    break; // No more rules to execute
-                }
+            if (nextTime != Long.MAX_VALUE && completedRules.size() < rules.length) {
                 long delay = nextTime - currentTime;
-                if (delay > 0) {
-                    try {
-                        Thread.sleep(delay); // Wait until the next scheduled execution
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                } else {
-                  nextTime = Long.MAX_VALUE;
-                }
+                SCHEDULER.schedule(() -> executeReadyRules(context, rules, group, pendingParents,
+                        completedRules, finalResultFuture, lastResult), delay, TimeUnit.MILLISECONDS);
             } else {
-                // Execute the first ready rule
-                CompiledRule rule = readyRules.get(0);
-                RuleOutcome outcome = executeSingleRule(rule, context);
-                String ruleName = rule.getRule().getName();
-                if (outcome.success) {
-                    completedRules.add(ruleName);
-                    if (outcome.finalResult != null) {
-                        finalResult = outcome.finalResult;
-                    }
-                    int i = ruleNameToIndex.get(ruleName);
-                    // Update dependencies for child rules
-                    for (int j = 0; j < rules.length; j++) {
-                        if (depMatrix[i][j] == 1) {
-                            String childName = rules[j].getRule().getName();
-                            pendingParents.put(childName, pendingParents.get(childName) - 1);
-                        }
-                    }
-                } else if (!canRetry(rule, context.getState(ruleName))) {
-                    context.getState(ruleName).setFailed(true); // Mark as failed if no retries remain
-                }
+                // No more rules to execute, complete with the last result
+                finalResultFuture.complete(lastResult.get());
             }
+            return;
         }
 
-       // clearCache();
+        // Execute ready rules in parallel
+        CompletableFuture<?>[] futures = readyRules.stream()
+                .map(rule -> CompletableFuture.supplyAsync(() -> {
+                    RuleOutcome outcome = executeSingleRule(rule, context);
+                    String ruleName = rule.getRule().getName();
+                    if (outcome.success) {
+                        synchronized (completedRules) {
+                            completedRules.add(ruleName);
+                            if (outcome.finalResult != null) {
+                                lastResult.set(outcome.finalResult);
+                            }
+                            // Update dependencies using adjacency list
+                            List<String> children = adjacencyPerGroup.get(group).get(ruleName);
+                            if (children != null) {
+                                for (String child : children) {
+                                    pendingParents.compute(child, (k, v) -> v - 1);
+                                }
+                            }
+                        }
+                        return outcome.finalResult != null ? outcome.finalResult : new Object();
+                    } else if (canRetry(rule, context.getState(ruleName))) {
+                        // Schedule retry
+                        RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
+                        state.incrementRetryCount();
+                        long retryTime = System.currentTimeMillis() + rule.getRule().getRetryDelay();
+                        state.setNextExecutionTime(retryTime);
+                        SCHEDULER.schedule(() -> executeReadyRules(context, rules, group, pendingParents,
+                                completedRules, finalResultFuture, lastResult), rule.getRule().getRetryDelay(), TimeUnit.MILLISECONDS);
+                        return new Object();
+                    } else {
+                        context.getState(ruleName).setFailed(true);
+                        return new Object();
+                    }
+                }, EXECUTION_POOL))
+                .toArray(CompletableFuture[]::new);
 
-        return finalResult;
+        CompletableFuture.allOf(futures).whenComplete((v, t) -> {
+            if (t != null) {
+                finalResultFuture.completeExceptionally(t);
+                return;
+            }
+            if (completedRules.size() < rules.length) {
+                executeReadyRules(context, rules, group, pendingParents, completedRules, finalResultFuture, lastResult);
+            } else {
+                finalResultFuture.complete(lastResult.get());
+            }
+        });
     }
 
     /**
@@ -574,7 +599,7 @@ public class LWREngine implements Cloneable {
             if (conditionResult) {
                 state.incrementExecutionCount();
                 executeAction(compiledRule, context);
-                if (compiledRule.getFinalEvaluator() != null) {
+                if (compiledRule.getFinalMethod() != null) {
                     finalResult = executeFinalBlock(compiledRule, context);
                 }
                 state.setCompleted(true);
@@ -596,24 +621,20 @@ public class LWREngine implements Cloneable {
             state.setLastError(e);
             if (state.getRetryCount() < rule.getMaxRetries()) {
                 boolean shouldRetry = true;
-                if (rule.getRetryCondition() != null && compiledRule.getRetryEvaluator() != null) {
+                if (rule.getRetryCondition() != null && compiledRule.getRetryMethod() != null) {
                     Map<String, Object> evalContext = getContext();
                     try {
                         populateContext(evalContext, rule, context);
-                        shouldRetry = (Boolean) compiledRule.getRetryEvaluator().evaluate(new Object[]{evalContext, e});
+                        Method retryMethod = compiledRule.getRetryMethod();
+                        Object instance = retryMethod.getDeclaringClass().getDeclaredConstructor().newInstance();
+                        shouldRetry = (Boolean) retryMethod.invoke(instance,new Object[]{evalContext, e});
                     } catch (Exception ex) {
                         shouldRetry = false;
                     } finally {
                         returnContext(evalContext);
                     }
                 }
-                if (shouldRetry) {
-                    state.incrementRetryCount();
-                    state.setNextExecutionTime(System.currentTimeMillis() + rule.getRetryDelay());
-                    if (traceEnabled) {
-                        System.out.println("Rule execution failed, will retry: " + rule.getName());
-                    }
-                } else {
+                if (!shouldRetry) {
                     state.setFailed(true);
                     if (traceEnabled) {
                         System.out.println("Rule failed (retry condition false): " + rule.getName());
@@ -639,15 +660,18 @@ public class LWREngine implements Cloneable {
      * @throws Exception if evaluation fails or times out
      */
     private boolean evaluateCondition(CompiledRule compiledRule, RuleExecutionContext context) throws Exception {
-        if (compiledRule.getConditionEvaluator() == null) return true;
+        if (compiledRule.getConditionMethod() == null) return true;
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
-            Future<Boolean> future = EXECUTION_POOL.submit(() ->
-                    (Boolean) compiledRule.getConditionEvaluator().evaluate(new Object[]{evalContext, null}));
-            return future.get(compiledRule.getRule().getTimeout(), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            throw new RuleTimeoutException("Condition evaluation timed out for rule: " + compiledRule.getRule().getName());
+            Method method = compiledRule.getConditionMethod();
+            Object instance = method.getDeclaringClass().getDeclaredConstructor().newInstance();
+            return (Boolean) method.invoke(instance, evalContext, null);
+        } catch (Exception e) {
+            if (e.getCause() instanceof TimeoutException) {
+                throw new RuleTimeoutException("Condition evaluation timed out for rule: " + compiledRule.getRule().getName());
+            }
+            throw e;
         } finally {
             returnContext(evalContext);
         }
@@ -661,15 +685,13 @@ public class LWREngine implements Cloneable {
      * @throws Exception if execution fails or times out
      */
     private void executeAction(CompiledRule compiledRule, RuleExecutionContext context) throws Exception {
-        if (compiledRule.getActionEvaluator() == null) return;
+        if (compiledRule.getActionMethod() == null) return;
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
-            Future<?> future = EXECUTION_POOL.submit(() -> {
-                compiledRule.getActionEvaluator().evaluate(new Object[]{evalContext, null});
-                return null;
-            });
-            future.get(compiledRule.getRule().getTimeout(), TimeUnit.MILLISECONDS);
+            Method method = compiledRule.getActionMethod();
+            Object instance = method.getDeclaringClass().getDeclaredConstructor().newInstance();
+            method.invoke(instance, evalContext, null);
             Rule rule = compiledRule.getRule();
             if (!rule.getProduces().isEmpty()) {
                 Map<String, Object> outputs = new HashMap<>();
@@ -678,8 +700,11 @@ public class LWREngine implements Cloneable {
                 }
                 ruleOutputs.put(rule.getName(), outputs);
             }
-        } catch (TimeoutException e) {
-            throw new RuleTimeoutException("Action execution timed out for rule: " + compiledRule.getRule().getName());
+        } catch (Exception e) {
+            if (e.getCause() instanceof TimeoutException) {
+                throw new RuleTimeoutException("Action execution timed out for rule: " + compiledRule.getRule().getName());
+            }
+            throw e;
         } finally {
             returnContext(evalContext);
         }
@@ -694,15 +719,18 @@ public class LWREngine implements Cloneable {
      * @throws Exception if execution fails or times out
      */
     private Object executeFinalBlock(CompiledRule compiledRule, RuleExecutionContext context) throws Exception {
-        if (compiledRule.getFinalEvaluator() == null) return null;
+        if (compiledRule.getFinalMethod() == null) return null;
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
-            Future<Object> future = EXECUTION_POOL.submit(() ->
-                    compiledRule.getFinalEvaluator().evaluate(new Object[]{evalContext, null}));
-            return future.get(compiledRule.getRule().getTimeout(), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            throw new RuleTimeoutException("Final block execution timed out for rule: " + compiledRule.getRule().getName());
+            Method method = compiledRule.getFinalMethod();
+            Object instance = method.getDeclaringClass().getDeclaredConstructor().newInstance();
+            return method.invoke(instance, evalContext, null);
+        } catch (Exception e) {
+            if (e.getCause() instanceof TimeoutException) {
+                throw new RuleTimeoutException("Final block execution timed out for rule: " + compiledRule.getRule().getName());
+            }
+            throw e;
         } finally {
             returnContext(evalContext);
         }
@@ -716,7 +744,7 @@ public class LWREngine implements Cloneable {
      * @param executionContext the rule execution context
      */
     private void populateContext(Map<String, Object> context, Rule rule, RuleExecutionContext executionContext) {
-        context.clear();
+        // Removed context.clear() as it's redundant; contexts are cleared when returned to the pool
         if (!executionContext.executionGlobals.isEmpty()) {
             context.putAll(executionContext.executionGlobals);
         }
@@ -774,7 +802,6 @@ public class LWREngine implements Cloneable {
      * Clears the rule output cache after execution to free up memory.
      */
     public void clearCache() {
-
         ruleOutputs.clear();
     }
 

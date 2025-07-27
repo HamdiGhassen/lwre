@@ -23,7 +23,7 @@ public class RuleCompilerTest {
         RuleCompiler compiler = new RuleCompiler();
         CompiledRule compiledRule = compiler.compileRule(rule, helpers);
         assertNotNull(compiledRule);
-        assertNotNull(compiledRule.getActionEvaluator());
+        assertNotNull(compiledRule.getActionMethod());
     }
 
     @Test
@@ -38,9 +38,9 @@ public class RuleCompilerTest {
         List<String> helpers = new ArrayList<>();
         RuleCompiler compiler = new RuleCompiler();
         CompiledRule compiledRule = compiler.compileRule(rule, helpers);
-        assertNotNull(compiledRule.getConditionEvaluator());
-        assertNotNull(compiledRule.getActionEvaluator());
-        assertNotNull(compiledRule.getFinalEvaluator());
+        assertNotNull(compiledRule.getConditionMethod());
+        assertNotNull(compiledRule.getActionMethod());
+        assertNotNull(compiledRule.getFinalMethod());
     }
 
     @Test
@@ -53,7 +53,7 @@ public class RuleCompilerTest {
         helpers.add("static boolean isEven(int num) { return num % 2 == 0; }");
         RuleCompiler compiler = new RuleCompiler();
         CompiledRule compiledRule = compiler.compileRule(rule, helpers);
-        assertNotNull(compiledRule.getActionEvaluator());
+        assertNotNull(compiledRule.getActionMethod());
     }
 
     @Test(expected = RuleCompiler.RuleCompilationException.class)
