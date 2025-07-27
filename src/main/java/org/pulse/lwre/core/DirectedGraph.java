@@ -263,7 +263,21 @@ public class DirectedGraph<T> {
 
         return hasPathDFS(sourceVertex, destVertex, new HashSet<>());
     }
-
+    /**
+     * Retrieves the in-degree of a given vertex, which is the number of edges pointing to it.
+     *
+     * @param vertex the vertex whose in-degree is requested
+     * @return the in-degree of the vertex
+     */
+    public int getInDegree(T vertex) {
+        int inDegree = 0;
+        for (List<T> neighbors : adjList.values()) {
+            if (neighbors.contains(vertex)) {
+                inDegree++;
+            }
+        }
+        return inDegree;
+    }
     /**
      * Performs a depth-first search to check for a path between two vertices.
      *
