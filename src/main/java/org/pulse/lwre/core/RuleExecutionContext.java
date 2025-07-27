@@ -61,7 +61,17 @@ public class RuleExecutionContext {
     public void resetState(String ruleName) {
         ruleStates.remove(ruleName);
     }
-
+    public void reset() {
+        for (RuleExecutionState state : ruleStates.values()) {
+            state.retryCount = 0;
+            state.executionCount = 0;
+            state.setFailed(false);
+            state.setCompleted(false);
+            state.setLastError(null);
+            state.setNextExecutionTime(0); // Reset to 0 or Long.MAX_VALUE
+        }
+        executionGlobals.clear();
+    }
     /**
      * Sets a global variable in the execution context.
      *
@@ -223,5 +233,6 @@ public class RuleExecutionContext {
             long timeSinceLast = System.currentTimeMillis() - lastExecutionTime;
             return timeSinceLast >= rule.getRetryDelay();
         }
+
     }
 }
