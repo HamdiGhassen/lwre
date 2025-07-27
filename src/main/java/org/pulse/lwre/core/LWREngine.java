@@ -53,7 +53,7 @@ public class LWREngine implements Cloneable {
     private final List<CompiledRule> compiledRules = new ArrayList<>();
     private final RuleCompiler compiler = new RuleCompiler();
     private final Map<String, Rule> ruleVersions = new ConcurrentHashMap<>();
-    private final CircuitBreaker circuitBreaker = new CircuitBreaker(5, 30_000);
+    private final CircuitBreaker circuitBreaker = new CircuitBreaker(1000000000, 30_000);
     private final MetricRegistry metrics = new MetricRegistry();
     private final Map<String, CompiledRule[]> compiledRulesByGroup = new ConcurrentHashMap<>();
     private final Map<String, Map<String, CompiledRule>> ruleByNamePerGroup = new ConcurrentHashMap<>();
@@ -288,6 +288,79 @@ public class LWREngine implements Cloneable {
         }
         return result.toArray(new CompiledRule[0]);
     }
+    /**
+     * Asynchronously executes all rules in a specified group, handling retries and timeouts.
+     *
+     * @param group the rule group to execute
+     * @return a CompletableFuture containing the final result of the execution
+     */
+    public CompletableFuture<Object> executeRulesAsync(String group) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (precomputedExecutionPaths.isEmpty()) {
+                try {
+                    throw new RuleExecutionException("Nothing to run");
+                } catch (RuleExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            String executionId = "EXEC" + System.nanoTime();
+            RuleExecutionContext context = new RuleExecutionContext(executionId);
+            Object result = null;
+            try {
+                result = executeRules(context, group, executionId);
+            } catch (RuleExecutionException e) {
+                throw new RuntimeException(e);
+            }
+            context.reset();
+            return result;
+        }, EXECUTION_POOL);
+    }
+
+    /**
+     * Asynchronously executes all rules across all groups, using parallel execution for multiple groups.
+     *
+     * @return a CompletableFuture containing the final result of the execution
+     */
+    public CompletableFuture<Object> executeRulesAsync() {
+        return CompletableFuture.supplyAsync(() -> {
+            if (precomputedExecutionPaths.isEmpty()) {
+                try {
+                    throw new RuleExecutionException("Nothing to run");
+                } catch (RuleExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            Set<String> groups = precomputedExecutionPaths.keySet();
+            if (groups.size() == 1) {
+                String executionId = "EXEC" + System.nanoTime();
+                RuleExecutionContext context = new RuleExecutionContext(executionId);
+                Object result = null;
+                try {
+                    result = executeRules(context, groups.iterator().next(), executionId);
+                } catch (RuleExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+                context.reset();
+                return result;
+            } else {
+                CompletableFuture<Object>[] futures = groups.stream()
+                        .map(group -> CompletableFuture.supplyAsync(() -> {
+                            try {
+                                String s = "EXEC" + System.nanoTime();
+                                RuleExecutionContext context = new RuleExecutionContext(s);
+                                Object o = executeRules(context, group, s);
+                                context.reset();
+                                return o;
+                            } catch (RuleExecutionException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }, EXECUTION_POOL))
+                        .toArray(CompletableFuture[]::new);
+                CompletableFuture.allOf(futures).join();
+                return futures[futures.length - 1].join();
+            }
+        }, EXECUTION_POOL);
+    }
 
     /**
      * Executes all rules in a specified group, handling retries and timeouts.
@@ -300,7 +373,11 @@ public class LWREngine implements Cloneable {
         if (precomputedExecutionPaths.isEmpty()) {
             throw new RuleExecutionException("Nothing to run");
         }
-        return executeRules(group, "EXEC" + System.nanoTime());
+        String executionId = "EXEC" + System.nanoTime();
+        RuleExecutionContext context = new RuleExecutionContext(executionId);
+        Object o = executeRules(context, group, executionId);
+        context.reset();
+        return o;
     }
 
     /**
@@ -315,12 +392,19 @@ public class LWREngine implements Cloneable {
         }
         Set<String> groups = precomputedExecutionPaths.keySet();
         if (groups.size() == 1) {
-            localResult = executeRules(groups.iterator().next(), "EXEC" + System.nanoTime());
+           String executionId = "EXEC" + System.nanoTime();
+            RuleExecutionContext context = new RuleExecutionContext(executionId);
+            localResult = executeRules(context,groups.iterator().next(),executionId );
+            context.reset();
         } else {
             CompletableFuture<Object>[] futures = groups.stream()
                     .map(group -> CompletableFuture.supplyAsync(() -> {
                         try {
-                            return executeRules(group, UUID.randomUUID().toString());
+                            String s = "EXEC" + System.nanoTime();
+                            RuleExecutionContext context = new RuleExecutionContext(s);
+                            Object o = executeRules(context, group, s);
+                            context.reset();
+                            return o;
                         } catch (RuleExecutionException e) {
                             throw new RuntimeException(e);
                         }
@@ -341,12 +425,12 @@ public class LWREngine implements Cloneable {
      * @return the final result of the execution
      * @throws RuleExecutionException if execution fails
      */
-    private Object executeRules(String group, String executionId) throws RuleExecutionException {
+    private Object executeRules(RuleExecutionContext context ,String group, String executionId) throws RuleExecutionException {
         CompiledRule[] rules = precomputedExecutionPaths.get(group);
         if (rules == null || rules.length == 0) {
             throw new RuleExecutionException("No rules found for group: " + group);
         }
-        RuleExecutionContext context = new RuleExecutionContext(executionId);
+
         Map<String, Integer> pendingParents = new HashMap<>(); // Tracks dependencies for each rule
         Map<String, Integer> ruleNameToIndex = ruleNameToIndexPerGroup.get(group);
         int[][] depMatrix = dependencyMatrixPerGroup.get(group);
@@ -364,7 +448,7 @@ public class LWREngine implements Cloneable {
 
         Set<String> completedRules = new HashSet<>();
         Object finalResult = null;
-
+        long nextTime = Long.MAX_VALUE;
         // Main execution loop: process rules until all are completed or failed
         while (true) {
             long currentTime = System.currentTimeMillis();
@@ -383,7 +467,7 @@ public class LWREngine implements Cloneable {
 
             if (readyRules.isEmpty()) {
                 // Determine the next scheduled execution time
-                long nextTime = Long.MAX_VALUE;
+
                 for (CompiledRule rule : rules) {
                     String ruleName = rule.getRule().getName();
                     RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
@@ -403,6 +487,8 @@ public class LWREngine implements Cloneable {
                         Thread.currentThread().interrupt();
                         break;
                     }
+                } else {
+                  nextTime = Long.MAX_VALUE;
                 }
             } else {
                 // Execute the first ready rule
@@ -427,7 +513,9 @@ public class LWREngine implements Cloneable {
                 }
             }
         }
-        clearCache();
+
+       // clearCache();
+
         return finalResult;
     }
 
@@ -686,6 +774,7 @@ public class LWREngine implements Cloneable {
      * Clears the rule output cache after execution to free up memory.
      */
     public void clearCache() {
+
         ruleOutputs.clear();
     }
 

@@ -4,12 +4,12 @@ import org.pulse.lwre.core.DirectedGraph;
 import org.pulse.lwre.core.Rule;
 import org.pulse.lwre.core.RuleGraphProcessor;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static java.util.List.of;
 /*
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -116,10 +116,16 @@ public class DSLParser {
         //TO Check Cycles
         Map<String, DirectedGraph<Rule>> stringDirectedGraphMap = RuleGraphProcessor.processRules(rules);
         for (Rule rule : rules) {
+            for (String v : rule.getProduces().keySet()) {
+                checkReservedWord(v,rule.getName(),"PRODUCE");
+                checkForContextKeywordUsage(v,rule.getName(),"PRODUCE");
+            }
             if (rules.stream().filter(r-> r.getName().equals(rule.getName()) && r.getGroup().equals(rule.getGroup())).count() != 1) {
                 throw new DSLException("Multiple rules with same name "+ rule.getName()+" on the same group "+ rule.getGroup());
             }
             for (Rule.UseVariable variable : rule.getUses().values()) {
+                checkForContextKeywordUsage(variable.getVariableName(),rule.getName(),"USE");
+                checkForContextKeywordUsage(variable.getSource(),rule.getName(),"USE");
                 if ("Global".equals(variable.getSource())) {
                    if (! parseResult.global.containsKey(variable.getVariableName())) {
                        throw new DSLException("RULE "+ rule.getName()+" uses an undefined Global variable : "+variable.getVariableName());
@@ -161,6 +167,7 @@ public class DSLParser {
             if (parts.length != 2) {
                 throw new DSLException("Invalid GLOBAL format. Expected: '<name> : <Type>'");
             }
+            checkReservedWord(parts[0].trim(),null,"#GLOBAL");
            globals.put(parts[0].trim(), parts[1].trim());
         }
     }
@@ -481,6 +488,34 @@ public class DSLParser {
         }
     }
     /**
+     * Defines the set of sreserved keywords that variables shouldn't be named as
+     * @return the set of reserved keywords
+     */
+    private static Set<String> reservedKeywords() {
+        return new ConcurrentSkipListSet<>(of("error","result","USE","PRODUCE","GLOBAL","CONDITION","ACTION","FINAL","RETRY","FROM","TIMEOUT","RULE","context"));
+    }
+    /**
+     * Check for the usage of context reserved word
+     * @param name the name to check
+     * @param ruleName the target rule
+     * @param blockName the target block
+     * @throws DSLException if context reserved word is used
+     */
+    private static void checkForContextKeywordUsage(String name,String ruleName,String blockName) throws DSLException{
+        if ("context".equals(name)) throw new DSLException("Usage of reserved word : "+ name+ " in the block : "+blockName+ ""+ (ruleName == null ?"": "on rule :"+ruleName));
+    }
+
+    /**
+     * Check for the usage of reserved word
+     * @param name the name to check
+     * @param ruleName the target rule
+     * @param blockName the target block
+     * @throws DSLException if any reserved word is used
+     */
+    private static void checkReservedWord(String name, String ruleName, String blockName) throws DSLException {
+        if (reservedKeywords().contains(name)) throw new DSLException("Usage of reserved word : "+ name+ " in the block : "+blockName+ ""+ (ruleName == null ?"": "on rule :"+ruleName));
+    }
+    /**
      * Inner class representing the result of parsing DSL content, containing rules and helper blocks.
      */
     public static class ParseResult {
@@ -524,5 +559,7 @@ public class DSLParser {
         public Map<String,String> getGlobals() {
             return global;
         }
+
+
     }
 }

@@ -329,7 +329,7 @@ public class RuleCompiler {
 
         Set<String> referenced = new HashSet<>();
         for (String var : candidates) {
-            // Use word boundaries to avoid partial matches
+
             Pattern varPattern = Pattern.compile("\\b" + Pattern.quote(var) + "\\b");
             if (varPattern.matcher(codeBlock).find()) {
                 referenced.add(var);
