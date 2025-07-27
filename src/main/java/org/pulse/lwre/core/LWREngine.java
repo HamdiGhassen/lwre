@@ -311,6 +311,13 @@ public class LWREngine implements Cloneable {
     }
 
     /**
+     * Shutdown the engine
+     */
+    public void shutdown() {
+        EXECUTION_POOL.shutdown();
+        SCHEDULER.shutdown();
+    }
+    /**
      * Asynchronously executes all rules across all groups, using parallel execution for multiple groups.
      *
      * @return a CompletableFuture containing the final result of the execution
@@ -513,8 +520,9 @@ public class LWREngine implements Cloneable {
                                     pendingParents.compute(child, (k, v) -> v - 1);
                                 }
                             }
+
+                            return outcome.finalResult != null ? outcome.finalResult : new Object();
                         }
-                        return outcome.finalResult != null ? outcome.finalResult : new Object();
                     } else if (canRetry(rule, context.getState(ruleName))) {
                         // Schedule retry
                         RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
