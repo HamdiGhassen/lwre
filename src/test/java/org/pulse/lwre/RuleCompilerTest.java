@@ -1,10 +1,7 @@
 package org.pulse.lwre;
 
 import org.junit.Test;
-import org.pulse.lwre.core.CompiledRule;
-import org.pulse.lwre.core.Rule;
-import org.pulse.lwre.core.RuleCompiler;
-import org.pulse.lwre.core.RuleExecutionException;
+import org.pulse.lwre.core.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,7 +53,7 @@ public class RuleCompilerTest {
         assertNotNull(compiledRule.getActionMethod());
     }
 
-    @Test(expected = RuleCompiler.RuleCompilationException.class)
+    @Test(expected = RuleCompilationException.class)
     public void testCompileWithForbiddenClass() throws Exception {
         Rule rule = new Rule();
         rule.setName("DangerousRule");
@@ -66,7 +63,7 @@ public class RuleCompilerTest {
         compiler.compileRule(rule, helpers);
     }
 
-    @Test(expected = RuleCompiler.RuleCompilationException.class)
+    @Test(expected = RuleCompilationException.class)
     public void testCompileInvalidSyntax() throws Exception {
         Rule rule = new Rule();
         rule.setName("InvalidRule");

@@ -961,31 +961,4 @@ public class LWREngine implements Cloneable {
         }
     }
 
-    /**
-     * Exception thrown when the engine is overloaded and the circuit breaker trips.
-     */
-    public static class EngineOverloadException extends RuleExecutionException {
-        /**
-         * Constructs a new {@code EngineOverloadException} with the specified message.
-         *
-         * @param message the error message
-         */
-        public EngineOverloadException(String message) {
-            super(message);
-        }
-    }
-
-    /**
-     * Exception thrown when a rule execution exceeds its configured timeout.
-     */
-    public static class RuleTimeoutException extends RuleExecutionException {
-        /**
-         * Constructs a new {@code RuleTimeoutException} with the specified message.
-         *
-         * @param message the error message
-         */
-        public RuleTimeoutException(String message) {
-            super(message);
-        }
-    }
 }
