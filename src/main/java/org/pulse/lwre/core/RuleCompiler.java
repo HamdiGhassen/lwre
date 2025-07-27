@@ -170,7 +170,7 @@ public class RuleCompiler {
 
         // Method definition
         code.append("    public ").append(returnType.getName()).append(" ").append(methodName)
-                .append("(Map context, Throwable error) {\n");
+                .append("(Map context, Throwable error) throws Exception {\n");
         for (Map.Entry<String, Rule.UseVariable> entry : rule.getUses().entrySet()) {
             String varName = entry.getKey();
             code.append("        ").append(varName).append(" = (").append(entry.getValue().getClassName())

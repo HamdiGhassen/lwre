@@ -625,7 +625,9 @@ public class LWREngine implements Cloneable {
                     Map<String, Object> evalContext = getContext();
                     try {
                         populateContext(evalContext, rule, context);
-                        shouldRetry = (Boolean) compiledRule.getRetryMethod().invoke(new Object[]{evalContext, e});
+                        Method retryMethod = compiledRule.getRetryMethod();
+                        Object instance = retryMethod.getDeclaringClass().getDeclaredConstructor().newInstance();
+                        shouldRetry = (Boolean) retryMethod.invoke(instance,new Object[]{evalContext, e});
                     } catch (Exception ex) {
                         shouldRetry = false;
                     } finally {
