@@ -157,7 +157,7 @@ public class CodeFormatter {
 
         // Step 2: Add 'public static' to method declarations, handling various cases
         return step1.replaceAll(
-                "(?m)^(\\s*)(?!public|private|protected|static|class|interface|enum|@?interface)((?:@\\w+\\s+)*)([\\w.<>,\\s\\[\\]]+\\s+\\w+\\s*\\()",
+                "(?m)^(\\s*)(?!public|private|protected|static|class|interface|enum|@?interface|if|for|while|return|switch)((?:@\\w+\\s+)*)((?:\\w+\\s*(?:<[^>]+>)?(?:\\[\\])?\\s+)+\\w+\\s*\\([^)]*\\)\\s*(?:throws\\s+[\\w,\\s]+)?\\s*\\{)",
                 "$1public static $2$3"
         );
     }

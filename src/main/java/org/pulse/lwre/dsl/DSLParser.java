@@ -4,12 +4,12 @@ import org.pulse.lwre.core.DirectedGraph;
 import org.pulse.lwre.core.Rule;
 import org.pulse.lwre.core.RuleGraphProcessor;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static java.util.List.of;
 /*
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,6 +47,21 @@ public class DSLParser {
             Pattern.compile("#VERSION\\s+(\\d+\\.\\d+\\.\\d+)");
     private static final Pattern EXECUTION_LIMIT_PATTERN =
             Pattern.compile("#MAX_EXECUTIONS\\s+(\\d+)");
+    public static final String GLOBAL = "#GLOBAL";
+    public static final String HELPER = "#HELPER";
+    public static final String RULE = "#RULE";
+    public static final String GROUP = "#GROUP";
+    public static final String IMPORT = "#IMPORT";
+    public static final String PRODUCE = "#PRODUCE";
+    public static final String USE = "#USE";
+    public static final String CONDITION = "#CONDITION";
+    public static final String ACTION = "#ACTION";
+    public static final String RETRY = "#RETRY";
+    public static final String NEXT_ON = "#NEXT_ON";
+    public static final String TIMEOUT = "#TIMEOUT";
+    public static final String VERSION = "#VERSION";
+    public static final String MAX_EXECUTIONS = "#MAX_EXECUTIONS";
+
     /**
      * Parses a DSL content string into a set of rules and helper blocks.
      *
@@ -72,17 +87,17 @@ public class DSLParser {
         for (String section : sections) {
             section = section.trim();
             if (section.isEmpty() || section.startsWith("//")) continue;
-            if (section.startsWith("#GLOBAL")) {
+            if (section.startsWith(GLOBAL)) {
                 inGlobalBlock = true;
                 String globalContent = section.substring(7).trim();
                 currentGlobal.append(globalContent).append("\n");
             }
-            if (section.startsWith("#HELPER")) {
+            if (section.startsWith(HELPER)) {
                 inHelperBlock = true;
                 // Remove #HELPER directive and keep the content
                 String helperContent = section.substring(7).trim();
                 currentHelper.append(helperContent).append("\n");
-            } else if (section.startsWith("#RULE")) {
+            } else if (section.startsWith(RULE)) {
                 // If we were in a helper block, finish it before processing rule
                 if (inHelperBlock) {
                     helpers.add(currentHelper.toString());
@@ -116,10 +131,16 @@ public class DSLParser {
         //TO Check Cycles
         Map<String, DirectedGraph<Rule>> stringDirectedGraphMap = RuleGraphProcessor.processRules(rules);
         for (Rule rule : rules) {
+            for (String v : rule.getProduces().keySet()) {
+                checkReservedWord(v,rule.getName(),"PRODUCE");
+                checkForContextKeywordUsage(v,rule.getName(),"PRODUCE");
+            }
             if (rules.stream().filter(r-> r.getName().equals(rule.getName()) && r.getGroup().equals(rule.getGroup())).count() != 1) {
                 throw new DSLException("Multiple rules with same name "+ rule.getName()+" on the same group "+ rule.getGroup());
             }
             for (Rule.UseVariable variable : rule.getUses().values()) {
+                checkForContextKeywordUsage(variable.getVariableName(),rule.getName(),"USE");
+                checkForContextKeywordUsage(variable.getSource(),rule.getName(),"USE");
                 if ("Global".equals(variable.getSource())) {
                    if (! parseResult.global.containsKey(variable.getVariableName())) {
                        throw new DSLException("RULE "+ rule.getName()+" uses an undefined Global variable : "+variable.getVariableName());
@@ -161,6 +182,7 @@ public class DSLParser {
             if (parts.length != 2) {
                 throw new DSLException("Invalid GLOBAL format. Expected: '<name> : <Type>'");
             }
+            checkReservedWord(parts[0].trim(),null, GLOBAL);
            globals.put(parts[0].trim(), parts[1].trim());
         }
     }
@@ -181,7 +203,7 @@ public class DSLParser {
             line = line.trim();
             if (line.startsWith("//")) continue;
 
-            if (line.startsWith("#RULE")) {
+            if (line.startsWith(RULE)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 String ruleName = line.substring(5).trim();
                 if (ruleName.isEmpty()) {
@@ -196,26 +218,26 @@ public class DSLParser {
                 } catch (NumberFormatException e) {
                     throw new DSLException("Invalid priority value: " + line.substring(9).trim());
                 }
-            } else if (line.startsWith("#GROUP")) {
+            } else if (line.startsWith(GROUP)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 rule.setGroup(line.substring(6).trim());
-            } else if (line.startsWith("#IMPORT")) {
+            } else if (line.startsWith(IMPORT)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "IMPORT";
                 currentBlock = new StringBuilder();
-            } else if (line.startsWith("#PRODUCE")) {
+            } else if (line.startsWith(PRODUCE)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "PRODUCE";
                 currentBlock = new StringBuilder();
-            } else if (line.startsWith("#USE")) {
+            } else if (line.startsWith(USE)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "USE";
                 currentBlock = new StringBuilder();
-            } else if (line.startsWith("#CONDITION")) {
+            } else if (line.startsWith(CONDITION)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "CONDITION";
                 currentBlock = new StringBuilder();
-            } else if (line.startsWith("#ACTION")) {
+            } else if (line.startsWith(ACTION)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "ACTION";
                 currentBlock = new StringBuilder();
@@ -223,25 +245,25 @@ public class DSLParser {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "FINAL";
                 currentBlock = new StringBuilder();
-            } else if (line.startsWith("#RETRY")) {
+            } else if (line.startsWith(RETRY)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 parseRetryDirective(rule, line);
-            } else if (line.startsWith("#NEXT_ON")) {
+            } else if (line.startsWith(NEXT_ON)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 parseNextDirective(rule, line);
-            } else if (line.startsWith("#TIMEOUT")) {
+            } else if (line.startsWith(TIMEOUT)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 parseTimeoutDirective(rule, line);
-            } else if (line.startsWith("#VERSION")) {
+            } else if (line.startsWith(VERSION)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 parseVersionDirective(rule, line);
-            } else if (line.startsWith("#MAX_EXECUTIONS")) {
+            } else if (line.startsWith(MAX_EXECUTIONS)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 parseExecutionLimit(rule, line);
             } else if (!line.startsWith("#")) {
                 if (currentBlock.length() > 0) currentBlock.append("\n");
                 currentBlock.append(line);
-            } else if (line.startsWith("#HELPER")) {
+            } else if (line.startsWith(HELPER)) {
                 flushBlock(rule, currentBlockType, currentBlock);
                 currentBlockType = "HELPER";
                 currentBlock = new StringBuilder();
@@ -481,6 +503,34 @@ public class DSLParser {
         }
     }
     /**
+     * Defines the set of sreserved keywords that variables shouldn't be named as
+     * @return the set of reserved keywords
+     */
+    private static Set<String> reservedKeywords() {
+        return new ConcurrentSkipListSet<>(of("error","USE","PRODUCE","GLOBAL","CONDITION","ACTION","FINAL","RETRY","FROM","TIMEOUT","RULE","context"));
+    }
+    /**
+     * Check for the usage of context reserved word
+     * @param name the name to check
+     * @param ruleName the target rule
+     * @param blockName the target block
+     * @throws DSLException if context reserved word is used
+     */
+    private static void checkForContextKeywordUsage(String name,String ruleName,String blockName) throws DSLException{
+        if ("context".equals(name)) throw new DSLException("Usage of reserved word : "+ name+ " in the block : "+blockName+ ""+ (ruleName == null ?"": "on rule :"+ruleName));
+    }
+
+    /**
+     * Check for the usage of reserved word
+     * @param name the name to check
+     * @param ruleName the target rule
+     * @param blockName the target block
+     * @throws DSLException if any reserved word is used
+     */
+    private static void checkReservedWord(String name, String ruleName, String blockName) throws DSLException {
+        if (reservedKeywords().contains(name)) throw new DSLException("Usage of reserved word : "+ name+ " in the block : "+blockName+ ""+ (ruleName == null ?"": "on rule :"+ruleName));
+    }
+    /**
      * Inner class representing the result of parsing DSL content, containing rules and helper blocks.
      */
     public static class ParseResult {
@@ -524,5 +574,7 @@ public class DSLParser {
         public Map<String,String> getGlobals() {
             return global;
         }
+
+
     }
 }
