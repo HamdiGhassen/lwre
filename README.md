@@ -49,33 +49,34 @@ Rules are defined using a DSL with directives for rule configuration, logic, and
 
 ```plaintext
 #GLOBAL
-userId : String
-threshold : Integer
-
+   userId : String
+   threshold : Integer
+                                
 #HELPER
-int calculateScore(int value) {
-    return value * 2;
-}
-
+   int calculateScore(int value) {
+       return value * 2;
+   }
+                                
 #RULE ValidateUser
 #GROUP UserValidation
 #PRIORITY 1
+
 #USE
-userId : String as user FROM Global
-#USE 
-threshold : Integer as threshold FROM Global
-#PRODUCE 
-score : Integer
+   userId : String as user FROM Global
+   threshold : Integer as threshold FROM Global
+
+#PRODUCE
+   score : Integer
+
 #CONDITION
-return user != null && threshold > 100;
+   return user != null && threshold > 100;
+
 #ACTION
-score = calculateScore(threshold);
-context.put("score", score);
+   score = calculateScore(threshold);
+   System.out.println("the score is : "+score);
+
 #FINAL
-return "Validation complete for user: " + user;
-#RETRY 3 DELAY 1000 IF { return error instanceof NullPointerException; }
-#TIMEOUT 5000 ms
-#NEXT_ON_SUCCESS ProcessUser
+   return "Validation complete for user: " + user;
 ```
 
 ### Integrating with Java
