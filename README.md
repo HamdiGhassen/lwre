@@ -53,7 +53,7 @@ userId : String
 threshold : Integer
 
 #HELPER
-public int calculateScore(int value) {
+int calculateScore(int value) {
     return value * 2;
 }
 
@@ -64,7 +64,8 @@ public int calculateScore(int value) {
 userId : String as user FROM Global
 #USE 
 threshold : Integer as threshold FROM Global
-#PRODUCE score : Integer
+#PRODUCE 
+score : Integer
 #CONDITION
 return user != null && threshold > 100;
 #ACTION
