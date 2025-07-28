@@ -1,0 +1,60 @@
+name: Create GitHub Issues from SonarCloud Reliability and Vulnerability Issues
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  sonar-issues:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the repository
+      - uses: actions/checkout@v4
+
+      # Run SonarCloud Scan (skip if using automatic analysis)
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarcloud-github-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORG }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+
+      # Install jq for JSON parsing
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # Fetch SonarCloud issues and create GitHub issues
+      - name: Create GitHub Issues for Reliability and Vulnerability Issues
+        run: |
+          # Fetch open BUG and VULNERABILITY issues
+          curl -u ${{ secrets.SONAR_TOKEN }}: -s "https://sonarcloud.io/api/issues/search?componentKeys=${{ secrets.SONAR_PROJECT_KEY }}&types=BUG,VULNERABILITY&statuses=OPEN" > issues.json
+
+          # Parse issues and create GitHub issues
+          jq -r '.issues[] | select(.type == "BUG" or .type == "VULNERABILITY") | {title: "SonarCloud \(.type) Issue: \(.message)", body: "**Type**: \(.type)\n**File**: \(.component)\n**Line**: \(.line // \"N/A\")\n**Severity**: \(.severity)\n**Message**: \(.message)\n**Rule**: \(.rule)\n**Link**: https://sonarcloud.io/project/issues?id=${{ secrets.SONAR_PROJECT_KEY }}&issues=\(.key)", key: .key}' issues.json | while IFS= read -r issue; do
+            title=$(echo "$issue" | jq -r '.title')
+            body=$(echo "$issue" | jq -r '.body')
+            issue_key=$(echo "$issue" | jq -r '.key')
+
+            # Check for existing issue to avoid duplicates
+            search_response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/search/issues?q=${title}+repo:${{ github.repository }}+state:open")
+
+            if [ $(echo "$search_response" | jq -r '.total_count') -eq 0 ]; then
+              curl -X POST \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github+json" \
+                -d "{\"title\": \"$title\", \"body\": \"$body\", \"labels\": [\"sonarcloud\", \"\(.type | ascii_downcase)\", \"bug\"]}"
+                "https://api.github.com/repos/${{ github.repository }}/issues"
+            else
+              echo "Issue with title '$title' already exists, skipping."
+            fi
+          done
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
