@@ -317,6 +317,7 @@ public class LWREngine implements Cloneable {
         EXECUTION_POOL.shutdown();
         SCHEDULER.shutdown();
         THREAD_LOCAL_CONTEXT_POOL.remove();
+        localResult.remove();
     }
     /**
      * Asynchronously executes all rules across all groups, using parallel execution for multiple groups.
