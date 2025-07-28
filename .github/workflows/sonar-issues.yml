@@ -1,4 +1,5 @@
-name: Create GitHub Issues from SonarCloud Reliability and Vulnerability Issues
+name: Create GitHub Issues from SonarCloud Critical Reliability Issues
+
 on:
   push:
     branches:
@@ -6,12 +7,23 @@ on:
   pull_request:
     branches:
       - main
+  schedule:
+    # Run daily at 9 AM UTC to catch any new issues
+    - cron: '0 9 * * *'
+  workflow_dispatch: # Allow manual triggering
+
 jobs:
   sonar-issues:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
     steps:
       # Checkout the repository
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for better SonarCloud analysis
 
       # Set up JDK 17 for Maven
       - name: Set up JDK 17
@@ -20,48 +32,155 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # Cache Maven dependencies
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
       # Run Maven build and SonarCloud scan
       - name: Run Maven Build and SonarCloud Scan
-        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: https://sonarcloud.io
-          SONAR_ORGANIZATION: ${{ secrets.SONAR_ORG }}
-          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
+        run: |
+          # First run the build
+          mvn -B verify
+          
+          # Then run SonarCloud analysis with explicit parameters
+          mvn sonar:sonar \
+            -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.organization=${{ secrets.SONAR_ORG }} \
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }} \
+            -Dsonar.projectName="${{ github.repository }}" \
+            -Dsonar.projectVersion="${{ github.sha }}"
         # If pom.xml is in a subdirectory, uncomment and adjust:
         # working-directory: ./submodule
 
-      # Install jq for JSON parsing
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      # Fetch SonarCloud issues and create GitHub issues
-      - name: Create GitHub Issues for Reliability and Vulnerability Issues
+      # Wait for SonarCloud analysis to complete
+      - name: Wait for SonarCloud Analysis
         run: |
-          # Fetch open BUG and VULNERABILITY issues
-          curl -u ${{ secrets.SONAR_TOKEN }}: -s "https://sonarcloud.io/api/issues/search?componentKeys=${{ secrets.SONAR_PROJECT_KEY }}&types=BUG,VULNERABILITY&statuses=OPEN" > issues.json
+          echo "Waiting for SonarCloud analysis to complete..."
+          sleep 30
 
-          # Parse issues and create GitHub issues
-          jq -r '.issues[] | select(.type == "BUG" or .type == "VULNERABILITY") | {title: "SonarCloud \(.type) Issue: \(.message)", body: "**Type**: \(.type)\n**File**: \(.component)\n**Line**: \(.line // \"N/A\")\n**Severity**: \(.severity)\n**Message**: \(.message)\n**Rule**: \(.rule)\n**Link**: https://sonarcloud.io/project/issues?id=${{ secrets.SONAR_PROJECT_KEY }}&issues=\(.key)", key: .key}' issues.json | while IFS= read -r issue; do
-            title=$(echo "$issue" | jq -r '.title')
-            body=$(echo "$issue" | jq -r '.body')
-            issue_key=$(echo "$issue" | jq -r '.key')
-
-            # Check for existing issue to avoid duplicates
-            search_response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/search/issues?q=${title}+repo:${{ github.repository }}+state:open")
-
-            if [ $(echo "$search_response" | jq -r '.total_count') -eq 0 ]; then
-              curl -X POST \
+      # Fetch SonarCloud reliability issues and create GitHub issues
+      - name: Create GitHub Issues for Critical Reliability Issues
+        run: |
+          set -e
+          
+          # Function to create issue with retry logic
+          create_github_issue() {
+            local title="$1"
+            local body="$2"
+            local labels="$3"
+            local max_retries=3
+            local retry_count=0
+          
+            while [ $retry_count -lt $max_retries ]; do
+              response=$(curl -s -w "%{http_code}" -X POST \
                 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                 -H "Accept: application/vnd.github+json" \
-                -d "{\"title\": \"$title\", \"body\": \"$body\", \"labels\": [\"sonarcloud\", \"\(.type | ascii_downcase)\", \"bug\"], \"assignees\": []}" \
-                "https://api.github.com/repos/${{ github.repository }}/issues"
+                -d "{\"title\": \"$title\", \"body\": \"$body\", \"labels\": $labels}" \
+                "https://api.github.com/repos/${{ github.repository }}/issues")
+          
+              http_code="${response: -3}"
+              if [ "$http_code" = "201" ]; then
+                echo "✅ Successfully created issue: $title"
+                return 0
+              else
+                echo "❌ Failed to create issue (HTTP $http_code): $title"
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $max_retries ]; then
+                  echo "Retrying in 5 seconds..."
+                  sleep 5
+                fi
+              fi
+            done
+            echo "Failed to create issue after $max_retries attempts: $title"
+            return 1
+          }
+          
+          # Fetch open BUG issues with BLOCKER and CRITICAL severity only
+          page=1
+          all_issues="[]"
+          
+          while true; do
+            echo "Fetching page $page of SonarCloud BLOCKER/CRITICAL BUG issues..."
+            response=$(curl -u ${{ secrets.SONAR_TOKEN }}: -s \
+              "https://sonarcloud.io/api/issues/search?componentKeys=${{ secrets.SONAR_PROJECT_KEY }}&types=BUG&severities=BLOCKER,CRITICAL&statuses=OPEN&p=$page&ps=100")
+          
+            issues=$(echo "$response" | jq '.issues')
+            if [ "$(echo "$issues" | jq 'length')" -eq 0 ]; then
+              break
+            fi
+          
+            all_issues=$(echo "$all_issues $issues" | jq -s 'add')
+            page=$((page + 1))
+          done
+          
+          echo "Found $(echo "$all_issues" | jq 'length') BLOCKER/CRITICAL BUG issues"
+          
+          # Process each BUG issue with BLOCKER or CRITICAL severity
+          echo "$all_issues" | jq -r '.[] | select(.type == "BUG" and (.severity == "BLOCKER" or .severity == "CRITICAL")) | @json' | while IFS= read -r issue_json; do
+            # Extract issue details
+            title=$(echo "$issue_json" | jq -r '"SonarCloud Reliability Issue: " + .message')
+            type=$(echo "$issue_json" | jq -r '.type')
+            component=$(echo "$issue_json" | jq -r '.component')
+            line=$(echo "$issue_json" | jq -r '.line // "N/A"')
+            severity=$(echo "$issue_json" | jq -r '.severity')
+            message=$(echo "$issue_json" | jq -r '.message')
+            rule=$(echo "$issue_json" | jq -r '.rule')
+            key=$(echo "$issue_json" | jq -r '.key')
+            effort=$(echo "$issue_json" | jq -r '.effort // "N/A"')
+          
+            # Create issue body with better formatting for reliability issues
+            body="## 🐛 SonarCloud Reliability Issue
+
+                 **Type**: \`BUG\` (Reliability)
+                 **Severity**: \`$severity\`
+                 **File**: \`$component\`
+                 **Line**: $line
+                 **Rule**: \`$rule\`
+                 **Effort**: $effort
+
+                 ### 📝 Description
+                 $message
+
+                 ### 🔗 Links
+                 - [View in SonarCloud](https://sonarcloud.io/project/issues?id=${{ secrets.SONAR_PROJECT_KEY }}&issues=$key)
+                 - [Rule Documentation](https://sonarcloud.io/coding_rules?open=$rule)
+
+                 ### 📋 Issue Key
+                 \`$key\`
+
+                 ---
+                 *This critical/blocker reliability issue was automatically created from SonarCloud analysis.*"
+  
+            # Labels for reliability issues only - simplified for BUG type
+            labels='["sonarcloud", "reliability", "bug"'
+            case "$severity" in
+            "BLOCKER") labels="$labels, \"blocker\", \"critical\"" ;;
+            "CRITICAL") labels="$labels, \"critical\", \"high-priority\"" ;;
+            esac
+            labels="$labels]"
+  
+            # Check for existing issue using the SonarCloud key
+            search_query="SonarCloud+Reliability+$key+repo:${{ github.repository }}+state:open"
+            search_response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/search/issues?q=$search_query")
+  
+            total_count=$(echo "$search_response" | jq -r '.total_count')
+  
+            if [ "$total_count" -eq 0 ]; then
+              echo "Creating new reliability issue for SonarCloud key: $key (Severity: $severity)"
+              create_github_issue "$title" "$body" "$labels"
             else
-              echo "Issue with title '$title' already exists, skipping."
+              echo "Reliability issue for SonarCloud key '$key' already exists, skipping."
             fi
           done
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+          echo "Reliability issue creation process completed."
+env:
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
