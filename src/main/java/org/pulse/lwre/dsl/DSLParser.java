@@ -410,6 +410,7 @@ public class DSLParser {
         if (m.find()) {
             try {
                 rule.setMaxRetries(Integer.parseInt(m.group(1)));
+                rule.setMaxExecutions(Integer.parseInt(m.group(1)) + 1);
                 if (m.group(2) != null) {
                     rule.setRetryDelay(Long.parseLong(m.group(2)));
                 }

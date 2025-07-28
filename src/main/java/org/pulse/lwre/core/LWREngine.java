@@ -43,7 +43,7 @@ public class LWREngine implements Cloneable {
             Runtime.getRuntime().availableProcessors(),
             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
             null, true);
-
+    private static final Map<CompiledRule,Boolean> scheduled = new ConcurrentHashMap<>();
     // Scheduler for handling retry delays
     private static final ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(
             Runtime.getRuntime().availableProcessors());
@@ -496,7 +496,6 @@ public class LWREngine implements Cloneable {
                 SCHEDULER.schedule(() -> executeReadyRules(context, rules, group, pendingParents,
                         completedRules, finalResultFuture, lastResult), delay, TimeUnit.MILLISECONDS);
             } else {
-                // No more rules to execute, complete with the last result
                 finalResultFuture.complete(lastResult.get());
             }
             return;
@@ -505,8 +504,9 @@ public class LWREngine implements Cloneable {
         // Execute ready rules in parallel with timeout enforcement
         CompletableFuture<?>[] futures = readyRules.stream()
                 .map(rule -> CompletableFuture.supplyAsync(() -> {
-                    RuleOutcome outcome;
                     String ruleName = rule.getRule().getName();
+                    RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
+                    RuleOutcome outcome;
                     try {
                         // Enforce rule-specific timeout
                         outcome = CompletableFuture.supplyAsync(() -> executeSingleRule(rule, context), EXECUTION_POOL)
@@ -514,7 +514,7 @@ public class LWREngine implements Cloneable {
                                 .join();
                     } catch (CompletionException e) {
                         if (e.getCause() instanceof TimeoutException) {
-                            context.getState(ruleName).setFailed(true);
+                            // Record timeout in metrics and circuit breaker
                             if (metric) {
                                 metrics.meter(ruleName + ".timeouts").mark();
                             }
@@ -522,6 +522,39 @@ public class LWREngine implements Cloneable {
                                 System.out.println("Rule timed out: " + ruleName);
                             }
                             circuitBreaker.recordFailure();
+                            state.setLastError(e.getCause());
+
+                            // Check if retry is possible
+                            if (canRetry(rule, state)) {
+                                // Evaluate retry condition if present
+                                boolean shouldRetry = true;
+                                if (rule.getRule().getRetryCondition() != null && rule.getRetryMethod() != null) {
+                                    Map<String, Object> evalContext = getContext();
+                                    try {
+                                        populateContext(evalContext, rule.getRule(), context);
+                                        Method retryMethod = rule.getRetryMethod();
+                                        Object instance = retryMethod.getDeclaringClass().getDeclaredConstructor().newInstance();
+                                        shouldRetry = (Boolean) retryMethod.invoke(instance, evalContext, e.getCause());
+                                    } catch (Exception ex) {
+                                        shouldRetry = false;
+                                    } finally {
+                                        returnContext(evalContext);
+                                    }
+                                }
+
+                                if (shouldRetry) {
+                                    // Schedule retry
+                                    state.incrementRetryCount();
+                                    long retryTime = System.currentTimeMillis() + rule.getRule().getRetryDelay();
+                                    state.setNextExecutionTime(retryTime);
+                                    SCHEDULER.schedule(() -> executeReadyRules(context, rules, group, pendingParents,
+                                                    completedRules, finalResultFuture, lastResult),
+                                            rule.getRule().getRetryDelay(), TimeUnit.MILLISECONDS);
+                                    return new Object();
+                                }
+                            }
+                            // No retry or retry condition failed, mark as failed
+                            state.setFailed(true);
                             return new Object();
                         }
                         throw e; // Propagate other exceptions
@@ -542,17 +575,17 @@ public class LWREngine implements Cloneable {
                             }
                             return outcome.finalResult != null ? outcome.finalResult : new Object();
                         }
-                    } else if (canRetry(rule, context.getState(ruleName))) {
-                        // Schedule retry
-                        RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
+                    } else if (canRetry(rule, state)) {
+                        // Schedule retry (non-timeout failure)
                         state.incrementRetryCount();
                         long retryTime = System.currentTimeMillis() + rule.getRule().getRetryDelay();
                         state.setNextExecutionTime(retryTime);
                         SCHEDULER.schedule(() -> executeReadyRules(context, rules, group, pendingParents,
-                                completedRules, finalResultFuture, lastResult), rule.getRule().getRetryDelay(), TimeUnit.MILLISECONDS);
+                                        completedRules, finalResultFuture, lastResult),
+                                rule.getRule().getRetryDelay(), TimeUnit.MILLISECONDS);
                         return new Object();
                     } else {
-                        context.getState(ruleName).setFailed(true);
+                        state.setFailed(true);
                         return new Object();
                     }
                 }, EXECUTION_POOL))
@@ -570,8 +603,7 @@ public class LWREngine implements Cloneable {
             }
         });
     }
-
-    /**
+       /**
      * Checks if a rule can be retried based on its retry count and maximum retries.
      *
      * @param rule the compiled rule
