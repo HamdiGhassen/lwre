@@ -536,6 +536,10 @@ public class LWREngine implements Cloneable {
                                         Object instance = retryMethod.getDeclaringClass().getDeclaredConstructor().newInstance();
                                         shouldRetry = (Boolean) retryMethod.invoke(instance, evalContext, e.getCause());
                                     } catch (Exception ex) {
+                                        if (traceEnabled) {
+                                            System.err.println("Error evaluating retry condition for rule: " + ruleName);
+                                            ex.printStackTrace();
+                                        }
                                         shouldRetry = false;
                                     } finally {
                                         returnContext(evalContext);
@@ -543,7 +547,8 @@ public class LWREngine implements Cloneable {
                                 }
 
                                 if (shouldRetry) {
-                                    // Schedule retry
+                                    // Clear error state and schedule retry
+                                    state.setLastError(null);
                                     state.incrementRetryCount();
                                     long retryTime = System.currentTimeMillis() + rule.getRule().getRetryDelay();
                                     state.setNextExecutionTime(retryTime);
@@ -576,7 +581,8 @@ public class LWREngine implements Cloneable {
                             return outcome.finalResult != null ? outcome.finalResult : new Object();
                         }
                     } else if (canRetry(rule, state)) {
-                        // Schedule retry (non-timeout failure)
+                        // Clear error state and schedule retry
+                        state.setLastError(null);
                         state.incrementRetryCount();
                         long retryTime = System.currentTimeMillis() + rule.getRule().getRetryDelay();
                         state.setNextExecutionTime(retryTime);
@@ -688,6 +694,10 @@ public class LWREngine implements Cloneable {
                         Object instance = retryMethod.getDeclaringClass().getDeclaredConstructor().newInstance();
                         shouldRetry = (Boolean) retryMethod.invoke(instance,new Object[]{evalContext, e});
                     } catch (Exception ex) {
+                        if (traceEnabled) {
+                            System.err.println("Error evaluating retry condition for rule: " + rule.getName());
+                            ex.printStackTrace();
+                        }
                         shouldRetry = false;
                     } finally {
                         returnContext(evalContext);
