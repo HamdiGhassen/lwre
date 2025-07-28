@@ -1,4 +1,5 @@
 # Lightweight Rule Engine (LWRE)
+[![Java CI with Maven and Release](https://github.com/HamdiGhassen/lwre/actions/workflows/maven.yml/badge.svg?branch=main)](https://github.com/HamdiGhassen/lwre/actions/workflows/maven.yml)[![CodeQL](https://github.com/HamdiGhassen/lwre/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/HamdiGhassen/lwre/actions/workflows/github-code-scanning/codeql)
 
 ## Overview
 The **Lightweight Rule Engine (LWRE)** is a  Java-based rule engine designed for dynamic rule execution in complex systems. It enables developers to define, compile, and execute business rules using a Domain-Specific Language (DSL), with support for dependency management, retries, timeouts, and parallel execution. The engine is optimized for performance with features like precomputed execution paths, thread-safe operations, and a circuit breaker pattern to prevent system overload.
