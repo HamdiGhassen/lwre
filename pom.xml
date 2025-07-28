@@ -6,7 +6,7 @@
 
     <groupId>org.pulse</groupId>
     <artifactId>lwre</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.0</version>
     <description>Lightweight Rule Engine (LWRE)</description>
     <developers>
         <developer>

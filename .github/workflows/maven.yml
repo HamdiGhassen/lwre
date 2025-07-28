@@ -34,20 +34,6 @@ jobs:
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "CURRENT_VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Increment version
-        run: |
-          NEW_VERSION=$(echo ${{ env.CURRENT_VERSION }} | awk -F. -v OFS=. '{++$3; print}')
-          mvn versions:set -DnewVersion=$NEW_VERSION -DgenerateBackupPoms=false
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-
-      - name: Commit updated POM
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add pom.xml
-          git commit -m "Bump version to ${{ env.NEW_VERSION }}"
-          git push
-
       - name: Build with Maven
         run: mvn -B package --file pom.xml
 
@@ -61,10 +47,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ env.NEW_VERSION }}
-          release_name: Release v${{ env.NEW_VERSION }}
+          tag_name: v${{ env.CURRENT_VERSION }}
+          release_name: Release v${{ env.CURRENT_VERSION }}
           body: |
-            Release of version ${{ env.NEW_VERSION }}
+            Release of version ${{ env.CURRENT_VERSION }}
             - Built with Java 17
             - Includes updated dependencies
           draft: false
