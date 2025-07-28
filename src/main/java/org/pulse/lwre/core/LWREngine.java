@@ -59,7 +59,7 @@ public class LWREngine implements Cloneable {
     private final List<CompiledRule> compiledRules = new ArrayList<>();
     private final RuleCompiler compiler = new RuleCompiler();
     private final Map<String, Rule> ruleVersions = new ConcurrentHashMap<>();
-    private final CircuitBreaker circuitBreaker = new CircuitBreaker(10, 30_000);
+    private  CircuitBreaker circuitBreaker  = new CircuitBreaker(10, 30_000);;
     private final MetricRegistry metrics = new MetricRegistry();
     private final Map<String, CompiledRule[]> compiledRulesByGroup = new ConcurrentHashMap<>();
     private final Map<String, Map<String, CompiledRule>> ruleByNamePerGroup = new ConcurrentHashMap<>();
@@ -944,6 +944,17 @@ public class LWREngine implements Cloneable {
          */
         public Builder rules(String dsl) throws Exception {
             e.addRules(dsl);
+            return this;
+        }
+
+        /**
+         * Configure the circuit breaker param
+         * @param maxFailure max allowed failure
+         * @param resetTimeout reset timeout
+         * @return this builder
+         */
+        public Builder circuitBreaker(int maxFailure,long resetTimeout) {
+            e.circuitBreaker  = new CircuitBreaker(maxFailure, resetTimeout);
             return this;
         }
 
