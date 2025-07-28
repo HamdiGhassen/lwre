@@ -35,7 +35,7 @@ The following dependencies are required. Add them to your `pom.xml`:
 ### Building from Source
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/lwre.git
+   git clone https://github.com/HamdiGhassen/lwre.git
    cd lwre
    ```
 2. Build the project using Maven:
