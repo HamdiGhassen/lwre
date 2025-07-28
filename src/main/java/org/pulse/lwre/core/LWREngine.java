@@ -465,8 +465,8 @@ public class LWREngine implements Cloneable {
      * @param lastResult        atomic reference to store the last non-null result
      */
     private void executeReadyRules(RuleExecutionContext context, CompiledRule[] rules, String group,
-                                  Map<String, Integer> pendingParents, Set<String> completedRules, CompletableFuture<Object> finalResultFuture,
-                                  AtomicReference<Object> lastResult) {
+                                   Map<String, Integer> pendingParents, Set<String> completedRules,
+                                   CompletableFuture<Object> finalResultFuture, AtomicReference<Object> lastResult) {
         List<CompiledRule> readyRules = new ArrayList<>();
         long currentTime = System.currentTimeMillis();
 
@@ -475,7 +475,7 @@ public class LWREngine implements Cloneable {
             String ruleName = rule.getRule().getName();
             RuleExecutionContext.RuleExecutionState state = context.getState(ruleName);
             if (!completedRules.contains(ruleName) && !state.isFailed() &&
-                pendingParents.get(ruleName) == 0 && state.getNextExecutionTime() <= currentTime) {
+                    pendingParents.get(ruleName) == 0 && state.getNextExecutionTime() <= currentTime) {
                 readyRules.add(rule);
             }
         }
@@ -502,11 +502,31 @@ public class LWREngine implements Cloneable {
             return;
         }
 
-        // Execute ready rules in parallel
+        // Execute ready rules in parallel with timeout enforcement
         CompletableFuture<?>[] futures = readyRules.stream()
                 .map(rule -> CompletableFuture.supplyAsync(() -> {
-                    RuleOutcome outcome = executeSingleRule(rule, context);
+                    RuleOutcome outcome;
                     String ruleName = rule.getRule().getName();
+                    try {
+                        // Enforce rule-specific timeout
+                        outcome = CompletableFuture.supplyAsync(() -> executeSingleRule(rule, context), EXECUTION_POOL)
+                                .orTimeout(rule.getRule().getTimeout(), TimeUnit.MILLISECONDS)
+                                .join();
+                    } catch (CompletionException e) {
+                        if (e.getCause() instanceof TimeoutException) {
+                            context.getState(ruleName).setFailed(true);
+                            if (metric) {
+                                metrics.meter(ruleName + ".timeouts").mark();
+                            }
+                            if (traceEnabled) {
+                                System.out.println("Rule timed out: " + ruleName);
+                            }
+                            circuitBreaker.recordFailure();
+                            return new Object();
+                        }
+                        throw e; // Propagate other exceptions
+                    }
+
                     if (outcome.success) {
                         synchronized (completedRules) {
                             completedRules.add(ruleName);
@@ -520,7 +540,6 @@ public class LWREngine implements Cloneable {
                                     pendingParents.compute(child, (k, v) -> v - 1);
                                 }
                             }
-
                             return outcome.finalResult != null ? outcome.finalResult : new Object();
                         }
                     } else if (canRetry(rule, context.getState(ruleName))) {
