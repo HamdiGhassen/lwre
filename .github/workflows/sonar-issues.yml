@@ -11,18 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checkout the repository
-      - uses: actions/checkout@v4
-
-      # Run SonarCloud Scan (skip if using automatic analysis)
-      - name: SonarCloud Scan
-        uses: sonarsource/sonarcloud-github-action@v2
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Run SonarCloud Scan with Maven
+        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: >
-            -Dsonar.organization=${{ secrets.SONAR_ORG }}
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+          SONAR_HOST_URL: https://sonarcloud.io
+          SONAR_ORGANIZATION: ${{ secrets.SONAR_ORG }}
+          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
 
       # Install jq for JSON parsing
       - name: Install jq
