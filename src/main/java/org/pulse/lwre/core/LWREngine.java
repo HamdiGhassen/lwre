@@ -72,7 +72,7 @@ public class LWREngine implements Cloneable {
     private volatile boolean traceEnabled = false;
     private volatile int maxExecutionSteps = 1000;
     private volatile boolean metric = false;
-    private volatile Object localResult = null;
+    private final ThreadLocal<Object> localResult = ThreadLocal.withInitial(() -> null);
 
     /**
      * Private constructor to enforce use of Builder pattern.
@@ -316,6 +316,7 @@ public class LWREngine implements Cloneable {
     public void shutdown() {
         EXECUTION_POOL.shutdown();
         SCHEDULER.shutdown();
+        THREAD_LOCAL_CONTEXT_POOL.remove();
     }
     /**
      * Asynchronously executes all rules across all groups, using parallel execution for multiple groups.
@@ -395,7 +396,7 @@ public class LWREngine implements Cloneable {
         if (groups.size() == 1) {
             String executionId = "EXEC" + System.nanoTime();
             RuleExecutionContext context = new RuleExecutionContext(executionId);
-            localResult = executeRules(context, groups.iterator().next(), executionId);
+            localResult.set(executeRules(context, groups.iterator().next(), executionId));
             context.reset();
         } else {
             CompletableFuture<Object>[] futures = groups.stream()
@@ -412,9 +413,9 @@ public class LWREngine implements Cloneable {
                     }, EXECUTION_POOL))
                     .toArray(CompletableFuture[]::new);
             CompletableFuture.allOf(futures).join();
-            localResult = futures[futures.length - 1].join();
+            localResult.set(futures[futures.length - 1].join());
         }
-        return localResult;
+        return localResult.get();
     }
 
     /**
