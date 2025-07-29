@@ -1,5 +1,6 @@
 package org.pulse.lwre.core;
 
+import org.pulse.lwre.dsl.DSLException;
 import org.pulse.lwre.dsl.DSLParser;
 import org.pulse.lwre.metric.Meter;
 import org.pulse.lwre.metric.MetricRegistry;
@@ -73,7 +74,7 @@ public class LWREngine implements Cloneable {
     private volatile int maxExecutionSteps = 1000;
     private volatile boolean metric = false;
     private final ThreadLocal<Object> localResult = ThreadLocal.withInitial(() -> null);
-
+    private final Object completedRulesLock = new Object();
     /**
      * Private constructor to enforce use of Builder pattern.
      */
@@ -177,7 +178,7 @@ public class LWREngine implements Cloneable {
     /**
      * Rebuilds group structures and precomputes execution paths for all rule groups to optimize runtime performance.
      */
-    private void rebuildGroupStructures() {
+    private void rebuildGroupStructures() throws DSLException {
         precomputedExecutionPaths.clear();
         ruleNameToIndexPerGroup.clear();
         compiledRulesByGroup.clear();
@@ -215,7 +216,7 @@ public class LWREngine implements Cloneable {
      * @param rules   the compiled rules in the group
      * @param nameMap mapping of rule names to compiled rules
      */
-    private void precomputeExecutionPath(String group, CompiledRule[] rules, Map<String, CompiledRule> nameMap) {
+    private void precomputeExecutionPath(String group, CompiledRule[] rules, Map<String, CompiledRule> nameMap) throws DSLException {
         List<Rule> ruleList = Arrays.stream(rules).map(CompiledRule::getRule).collect(Collectors.toList());
         Map<String, DirectedGraph<Rule>> ruleGraphsByGroup = RuleGraphProcessor.processRules(ruleList);
         DirectedGraph<Rule> ruleGraph = ruleGraphsByGroup.get(group);
@@ -466,6 +467,7 @@ public class LWREngine implements Cloneable {
      * @param finalResultFuture future to complete with the final result
      * @param lastResult        atomic reference to store the last non-null result
      */
+
     private void executeReadyRules(RuleExecutionContext context, CompiledRule[] rules, String group,
                                    Map<String, Integer> pendingParents, Set<String> completedRules,
                                    CompletableFuture<Object> finalResultFuture, AtomicReference<Object> lastResult) {
@@ -568,7 +570,7 @@ public class LWREngine implements Cloneable {
                     }
 
                     if (outcome.success) {
-                        synchronized (completedRules) {
+                        synchronized (completedRulesLock) { // Use the dedicated lock object
                             completedRules.add(ruleName);
                             if (outcome.finalResult != null) {
                                 lastResult.set(outcome.finalResult);
@@ -611,7 +613,8 @@ public class LWREngine implements Cloneable {
             }
         });
     }
-       /**
+
+     /**
      * Checks if a rule can be retried based on its retry count and maximum retries.
      *
      * @param rule the compiled rule
@@ -955,7 +958,11 @@ public class LWREngine implements Cloneable {
         cloned.compiledRules.addAll(this.compiledRules);
         cloned.globalVariables.putAll(this.globalVariables);
         cloned.ruleVersions.putAll(this.ruleVersions);
-        cloned.rebuildGroupStructures();
+        try {
+            cloned.rebuildGroupStructures();
+        } catch (DSLException e) {
+            throw new RuntimeException(e);
+        }
         return cloned;
     }
 

@@ -149,16 +149,73 @@ public class CodeFormatter {
      * @return the processed helper block
      */
     public static String adjustHelperMethodAccess(String helperCode) {
-        // Step 1: Remove existing access modifiers and 'static' only before method declarations
-        String step1 = helperCode.replaceAll(
+        String src = helperCode.replaceAll(
                 "(?m)^(\\s*)(public|private|protected|static\\b\\s*)+",
                 "$1"
         );
 
-        // Step 2: Add 'public static' to method declarations, handling various cases
-        return step1.replaceAll(
-                "(?m)^(\\s*)(?!public|private|protected|static|class|interface|enum|@?interface|if|for|while|return|switch)((?:@\\w+\\s+)*)((?:\\w+\\s*(?:<[^>]+>)?(?:\\[\\])?\\s+)+\\w+\\s*\\([^)]*\\)\\s*(?:throws\\s+[\\w,\\s]+)?\\s*\\{)",
-                "$1public static $2$3"
-        );
+        return addPublicStaticToMethods(src);
+    }
+    /**
+     * Modifies the input Java source code to add 'public static' to method declarations
+     * that do not have certain modifiers (public, private, protected, static, etc.).
+     * Processes the input line by line to avoid stack overflow.
+     *
+     * @param sourceCode the input Java source code as a string
+     * @return the modified source code with 'public static' added to eligible methods
+     */
+    public static String addPublicStaticToMethods(String sourceCode) {
+        StringBuilder result = new StringBuilder();
+        String[] lines = sourceCode.split("\n");
+        boolean inMultiLineComment = false;
+
+        String methodRegex = "^(\\s*)(?:@\\w+\\s+)*(\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*(?:throws\\s+[\\w,\\s]+)?\\s*\\{)";
+
+        for (String line : lines) {
+            String trimmedLine = line.trim();
+            if (trimmedLine.startsWith("/*")) {
+                inMultiLineComment = true;
+                result.append(line).append("\n");
+                continue;
+            }
+            if (inMultiLineComment) {
+                if (trimmedLine.endsWith("*/")) {
+                    inMultiLineComment = false;
+                }
+                result.append(line).append("\n");
+                continue;
+            }
+            if (trimmedLine.startsWith("//") || trimmedLine.isEmpty()) {
+                result.append(line).append("\n");
+                continue;
+            }
+
+            if (line.matches(methodRegex)) {
+                String indent = line.replaceAll("^((\\s*).*$)", "$2");
+                String methodSignature = line.replaceAll(methodRegex, "$1$2");
+                boolean hasExcludedModifier = trimmedLine.contains("public ")
+                        || trimmedLine.contains("private ")
+                        || trimmedLine.contains("protected ")
+                        || trimmedLine.contains("static ")
+                        || trimmedLine.contains("class ")
+                        || trimmedLine.contains("interface ")
+                        || trimmedLine.contains("enum ")
+                        || trimmedLine.contains("if ")
+                        || trimmedLine.contains("for ")
+                        || trimmedLine.contains("while ")
+                        || trimmedLine.contains("return ")
+                        || trimmedLine.contains("switch ");
+
+                if (!hasExcludedModifier) {
+                    result.append(indent).append("public static ").append(methodSignature.trim()).append("\n");
+                } else {
+                    result.append(line).append("\n");
+                }
+            } else {
+                result.append(line).append("\n");
+            }
+        }
+
+        return result.toString();
     }
 }

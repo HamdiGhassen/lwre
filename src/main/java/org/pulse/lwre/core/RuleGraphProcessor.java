@@ -35,7 +35,7 @@ public class RuleGraphProcessor {
      * @param rules the list of rules to process
      * @return a map of group names to their corresponding directed graphs
      */
-    public static Map<String, DirectedGraph<Rule>> processRules(List<Rule> rules) {
+    public static Map<String, DirectedGraph<Rule>> processRules(List<Rule> rules) throws DSLException {
         Map<String, DirectedGraph<Rule>> groupGraphs = new HashMap<>();
         Map<String, List<Rule>> rulesByGroup = new HashMap<>();
         for (Rule rule : rules) {
@@ -104,7 +104,7 @@ public class RuleGraphProcessor {
             try {
                 entry.getValue().topologicalSort();
             } catch (IllegalStateException e) {
-                new DSLException("Warning: Cycle detected in rule dependencies for group: " + entry.getKey());
+             throw  new DSLException("Warning: Cycle detected in rule dependencies for group: " + entry.getKey());
             }
         }
 

@@ -4,6 +4,7 @@ import org.junit.Test;
 import org.pulse.lwre.core.DirectedGraph;
 import org.pulse.lwre.core.Rule;
 import org.pulse.lwre.core.RuleGraphProcessor;
+import org.pulse.lwre.dsl.DSLException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,7 +15,7 @@ import static org.junit.Assert.*;
 public class RuleGraphProcessorTest {
 
     @Test
-    public void testBuildGraphNoDependencies() {
+    public void testBuildGraphNoDependencies() throws DSLException {
         List<Rule> rules = new ArrayList<>();
         Rule rule1 = new Rule();
         rule1.setName("Rule1");
@@ -30,7 +31,7 @@ public class RuleGraphProcessorTest {
     }
 
     @Test
-    public void testBuildGraphWithDependencies() {
+    public void testBuildGraphWithDependencies() throws DSLException {
         List<Rule> rules = new ArrayList<>();
         Rule rule1 = new Rule();
         rule1.setName("Rule1");
@@ -49,8 +50,8 @@ public class RuleGraphProcessorTest {
         assertEquals("Rule2", sorted.get(1).getName());
     }
 
-    @Test(expected = IllegalStateException.class)
-    public void testBuildGraphWithCycle() {
+    @Test(expected = DSLException.class)
+    public void testBuildGraphWithCycle() throws DSLException {
         List<Rule> rules = new ArrayList<>();
         Rule rule1 = new Rule();
         rule1.setName("Rule1");
@@ -68,7 +69,7 @@ public class RuleGraphProcessorTest {
     }
 
     @Test
-    public void testPrioritySorting() {
+    public void testPrioritySorting() throws DSLException {
         List<Rule> rules = new ArrayList<>();
         Rule rule1 = new Rule();
         rule1.setName("Rule1");
@@ -89,7 +90,7 @@ public class RuleGraphProcessorTest {
     }
 
     @Test
-    public void testMissingDependency() {
+    public void testMissingDependency() throws DSLException {
         List<Rule> rules = new ArrayList<>();
         Rule rule = new Rule();
         rule.setName("Rule1");
