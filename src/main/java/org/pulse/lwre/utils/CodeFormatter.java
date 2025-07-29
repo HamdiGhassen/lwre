@@ -159,7 +159,7 @@ public class CodeFormatter {
     /**
      * Modifies the input Java source code to add 'public static' to method declarations
      * that do not have certain modifiers (public, private, protected, static, etc.).
-     * Processes the input line by line to avoid stack overflow.
+     * Processes the input line by line with a simplified regex to avoid stack overflow.
      *
      * @param sourceCode the input Java source code as a string
      * @return the modified source code with 'public static' added to eligible methods
@@ -169,10 +169,20 @@ public class CodeFormatter {
         String[] lines = sourceCode.split("\n");
         boolean inMultiLineComment = false;
 
-        String methodRegex = "^(\\s*)(?:@\\w+\\s+)*(\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*(?:throws\\s+[\\w,\\s]+)?\\s*\\{)";
+        // Simplified regex to match basic method declarations
+        // Matches: [optional whitespace][return type][method name]([parameters]){
+        String methodRegex = "^(\\s*)(\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*\\{)";
 
         for (String line : lines) {
             String trimmedLine = line.trim();
+
+            // Skip long lines to prevent regex engine strain (arbitrary limit, e.g., 1000 chars)
+            if (line.length() > 1000) {
+                result.append(line).append("\n");
+                continue;
+            }
+
+            // Handle multi-line comments
             if (trimmedLine.startsWith("/*")) {
                 inMultiLineComment = true;
                 result.append(line).append("\n");
@@ -185,14 +195,20 @@ public class CodeFormatter {
                 result.append(line).append("\n");
                 continue;
             }
+
+            // Skip single-line comments and empty lines
             if (trimmedLine.startsWith("//") || trimmedLine.isEmpty()) {
                 result.append(line).append("\n");
                 continue;
             }
 
+            // Check if the line is a method declaration
             if (line.matches(methodRegex)) {
-                String indent = line.replaceAll("^((\\s*).*$)", "$2");
-                String methodSignature = line.replaceAll(methodRegex, "$1$2");
+                // Extract indentation and method signature
+                String indent = line.replaceAll("^(\\s*).*$", "$1");
+                String methodSignature = line.replaceAll(methodRegex, "$2");
+
+                // Check for excluded modifiers and keywords
                 boolean hasExcludedModifier = trimmedLine.contains("public ")
                         || trimmedLine.contains("private ")
                         || trimmedLine.contains("protected ")
@@ -206,7 +222,11 @@ public class CodeFormatter {
                         || trimmedLine.contains("return ")
                         || trimmedLine.contains("switch ");
 
-                if (!hasExcludedModifier) {
+                // Check for annotations (e.g., @Override) to avoid false positives
+                boolean hasAnnotation = trimmedLine.startsWith("@");
+
+                if (!hasExcludedModifier && !hasAnnotation) {
+                    // Add 'public static' with proper indentation
                     result.append(indent).append("public static ").append(methodSignature.trim()).append("\n");
                 } else {
                     result.append(line).append("\n");
