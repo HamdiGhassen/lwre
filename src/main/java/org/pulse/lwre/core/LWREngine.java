@@ -735,6 +735,7 @@ public class LWREngine implements Cloneable {
      */
     private boolean evaluateCondition(CompiledRule compiledRule, RuleExecutionContext context) throws Exception {
         if (compiledRule.getConditionMethod() == null) return true;
+
         Map<String, Object> evalContext = getContext();
         try {
             populateContext(evalContext, compiledRule.getRule(), context);
@@ -747,6 +748,9 @@ public class LWREngine implements Cloneable {
             }
             throw e;
         } finally {
+            if(metric) {
+                metrics.meter(compiledRule.getRule().getName() + ".condition").mark();
+            }
             returnContext(evalContext);
         }
     }
@@ -780,6 +784,9 @@ public class LWREngine implements Cloneable {
             }
             throw e;
         } finally {
+            if(metric) {
+                metrics.meter(compiledRule.getRule().getName() + ".action").mark();
+            }
             returnContext(evalContext);
         }
     }
@@ -806,6 +813,9 @@ public class LWREngine implements Cloneable {
             }
             throw e;
         } finally {
+            if(metric) {
+                metrics.meter(compiledRule.getRule().getName() + ".final").mark();
+            }
             returnContext(evalContext);
         }
     }
